@@ -843,66 +843,6 @@ server.tool(
 );
 
 // =======================
-// 5) NEW Tool: patient_search (POST /v1/patients/search)
-// =======================
-const apiSearchOps = z.enum(["eq", "neq", "gt", "gte", "lt", "lte", "like", "contains", "in", "between", "isnull", "notnull"]);
-
-const apiFilterSchema = z.object({
-  field: z.string().min(1).describe("Campo SQL, ej: persons.ci, persons.sexo, citas.fecha"),
-  op: apiSearchOps.optional().default("eq").describe("Operador del backend"),
-  value: z.any().optional().describe("Valor del filtro (between usa array: [from,to])"),
-});
-
-server.tool(
-  "patient_search",
-  "POST /v1/patients/search. Búsqueda server-side con filtros SQL (persons.*, citas.*, etc).",
-  {
-    filters: z.array(apiFilterSchema).optional().default([]),
-    include: z.array(z.string()).optional().describe("Opcional: relaciones/include si tu backend lo soporta."),
-    page: z.number().int().min(1).optional().describe("Opcional si tu backend pagina."),
-    pageSize: z.number().int().min(1).max(500).optional().describe("Opcional si tu backend pagina."),
-    sort: z
-      .object({
-        field: z.string().min(1),
-        direction: z.enum(["asc", "desc"]).optional().default("asc"),
-      })
-      .optional()
-      .describe("Opcional si tu backend soporta sort."),
-    rawBody: z.any().optional().describe("Si lo envías, se usa como body directamente (ignora los campos anteriores)."),
-    debug: z.boolean().optional().default(false),
-  },
-  async (args: any) => {
-    if (!API_BASE_URL) return errPayload("patient_search", "API_BASE_URL no está configurado en env.");
-
-    try {
-      const url = `${API_BASE_URL}/v1/patients/search`;
-
-      const body =
-        args?.rawBody !== undefined
-          ? args.rawBody
-          : {
-              filters: (args?.filters ?? []).map((f: any) => ({
-                field: String(f.field),
-                op: (f.op && String(f.op).trim()) || "eq",
-                value: f.value,
-              })),
-              ...(args?.include ? { include: args.include } : {}),
-              ...(args?.page ? { page: args.page } : {}),
-              ...(args?.pageSize ? { pageSize: args.pageSize } : {}),
-              ...(args?.sort ? { sort: args.sort } : {}),
-            };
-
-      const data = await httpPostJson(url, body);
-      const out = args?.debug ? { request: { url, body }, response: data } : data;
-
-      return okPayload("patient_search", url, out);
-    } catch (e) {
-      return errPayload("patient_search", e);
-    }
-  }
-);
-
-// =======================
 // Start
 // =======================
 async function main() {

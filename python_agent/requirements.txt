@@ -4,8 +4,8 @@ python-dotenv>=1.0
 pandas>=2.2
 sqlalchemy>=2.0
 mysql-connector-python>=9.0
-#openai>=1.51   # SDK nuevo (sirve para OpenAI pública y Azure OpenAI)
 streamlit>=1.38
-#openai==0.28.1
 openai>=1.0.0
 openpyxl>=3.1.2
+mcp>=1.0.0
+anyio>=4.0
