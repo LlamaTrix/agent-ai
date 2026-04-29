@@ -1,0 +1,34 @@
+# Secrets
+.env
+*.env
+!.env.example
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+*.egg-info/
+
+# Node
+node_modules/
+dist/
+npm-debug.log*
+
+# Logs
+*.log
+mcp_debug.log
+
+# IDE
+.vscode/
+.idea/
+.claude/
+.DS_Store
+
+# Runtime exports
+python_agent/exports/*
+!python_agent/exports/.gitkeep
+
+# pm2
+.pm2/
