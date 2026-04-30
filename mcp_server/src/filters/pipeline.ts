@@ -44,8 +44,12 @@ export function compareOp(a: any, op: string, b: any) {
   const B = toComparable(b);
   switch (op) {
     case "eq":
+      if (typeof a === "string" && typeof b === "string")
+        return a.trim().toLowerCase() === b.trim().toLowerCase();
       return A === B;
     case "neq":
+      if (typeof a === "string" && typeof b === "string")
+        return a.trim().toLowerCase() !== b.trim().toLowerCase();
       return A !== B;
     case "gt":
       return A != null && B != null && (A as any) > (B as any);

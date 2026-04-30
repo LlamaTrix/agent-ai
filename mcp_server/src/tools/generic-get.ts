@@ -46,6 +46,10 @@ const tools: ToolDef[] = [
     path: "/v1/antecedents/{id}",
     inputShape: { id: z.string() },
   },
+
+  { name: "dashboard_stats", description: "GET /v1/dashboard — estadísticas generales del sistema", path: "/v1/dashboard" },
+  { name: "payments_list", description: "GET /v1/payments — lista de pagos", path: "/v1/payments" },
+  { name: "payments_statistics", description: "GET /v1/payments/statistics — estadísticas de pagos (day/mont/year/total)", path: "/v1/payments/statistics" },
 ];
 
 export function registerGenericGetTools(server: McpServer) {
