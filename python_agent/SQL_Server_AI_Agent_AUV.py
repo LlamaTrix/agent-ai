@@ -361,6 +361,9 @@ def _extract_nombre(question: str) -> Optional[str]:
         "de", "del", "con", "para", "que", "como", "quien", "quién",
         "un", "una", "unos", "unas", "en", "al", "se", "datos", "informacion",
         "información", "nombre", "apellido", "llamado", "llama", "apellidos",
+        "mujer", "mujeres", "hombre", "hombres", "masculino", "femenino",
+        "varon", "varones", "mayor", "mayores", "menor", "menores",
+        "anos", "edad", "sangre", "tipo", "sangre",
     }
     tokens = re.findall(r"[a-záéíóúüñ]+", _strip_accents_lc(question or ""), re.IGNORECASE)
     # quedarse con tokens que no son stopwords y tienen más de 2 letras
@@ -695,7 +698,7 @@ class MedicalAgentMCP:
         return None
 
     async def _visitas(self, question: str, want_count: bool) -> Optional[Dict[str, Any]]:
-        if "patient_search" not in self.tools.allowed_tools:
+        if "visitas_by_patient" not in self.tools.allowed_tools:
             return None
         # extraer patient_id de la pregunta si menciona un número
         m = re.search(r"\b(\d+)\b", question)
