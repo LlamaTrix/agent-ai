@@ -148,7 +148,7 @@ def _is_list_request(q: str) -> bool:
     t = _strip_accents_lc(q or "")
     return any(w in t for w in [
         "lista", "listame", "listado", "dame", "mostrar", "muéstrame", "muestrame",
-        "ver", "traeme", "tráeme", "quiero ver"
+        "ver", "traeme", "tráeme", "quiero ver", "devuelveme", "enseñame", "mostrarme", "mostrame", "devolveme"
     ])
 
 def _diagnose_node_process_sync(cmd: List[str], env: Dict[str, str], cwd: Optional[str], seconds: int = 5):
