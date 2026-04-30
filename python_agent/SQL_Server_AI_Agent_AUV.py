@@ -18,6 +18,7 @@ import os
 import re
 import io
 import json
+import base64
 import hashlib
 import unicodedata
 import subprocess
@@ -278,6 +279,14 @@ def _render_patients_list(rows: List[Dict[str, Any]], total: int, limit: int = 2
     if total > limit:
         return f"Encontré {total} pacientes. Mostrando {limit}:\n{lines}\n…(+{total - limit} más)"
     return f"Encontré {total} pacientes:\n{lines}"
+
+def _rows_to_excel_b64(rows: List[Dict[str, Any]], sheet_name: str = "Resultados") -> Optional[str]:
+    try:
+        buf = io.BytesIO()
+        pd.DataFrame(rows).to_excel(buf, index=False, sheet_name=sheet_name, engine="openpyxl")
+        return base64.b64encode(buf.getvalue()).decode("utf-8")
+    except Exception:
+        return None
 
 def _fingerprint_patient_ids(rows: List[Dict[str, Any]], n: int = 10) -> Tuple[str, ...]:
     """
@@ -692,7 +701,8 @@ class MedicalAgentMCP:
         flat_rows = [_flatten_patient_row(r) for r in payload["rows"]]
         payload["rows"] = flat_rows
         answer = _render_patients_list(flat_rows, total=total, limit=100)
-        return {"answer": answer, "data": payload, "steps": 2}
+        excel_b64 = _rows_to_excel_b64(flat_rows, sheet_name="Pacientes")
+        return {"answer": answer, "data": payload, "steps": 2, "excel_bytes": excel_b64, "excel_name": "pacientes.xlsx"}
 
     async def _pagos(self, question: str, want_count: bool) -> Optional[Dict[str, Any]]:
         q = _strip_accents_lc(question)
@@ -769,7 +779,7 @@ class MedicalAgentMCP:
                 {"field": "hora_inicio", "op": "gte", "value": dr[0]},
                 {"field": "hora_inicio", "op": "lte", "value": dr[1]},
             ]
-        args = {"filters": filters, "page": 1, "pageSize": 20}
+        args = {"filters": filters, "limit": 1000}
         res = await self.tools.call("citas_filter", args)
         total = _extract_total_from_filter_tool(res) or 0
         if want_count:
@@ -777,7 +787,8 @@ class MedicalAgentMCP:
         items = res.get("items", []) if isinstance(res, dict) else []
         payload = _to_rows_payload(items)
         answer = f"Encontré {total} citas." if total else "No se encontraron citas."
-        return {"answer": answer, "data": payload, "steps": 1}
+        excel_b64 = _rows_to_excel_b64(items, sheet_name="Citas") if items else None
+        return {"answer": answer, "data": payload, "steps": 1, "excel_bytes": excel_b64, "excel_name": "citas.xlsx"}
 
     async def query(self, question: str) -> Dict[str, Any]:
         q = _strip_accents_lc(question or "")
