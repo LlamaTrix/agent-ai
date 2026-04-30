@@ -147,8 +147,17 @@ def _is_count_request(q: str) -> bool:
 def _is_list_request(q: str) -> bool:
     t = _strip_accents_lc(q or "")
     return any(w in t for w in [
-        "lista", "listame", "listado", "dame", "mostrar", "muéstrame", "muestrame",
-        "ver", "traeme", "tráeme", "quiero ver", "devuelveme", "enseñame", "mostrarme", "mostrame", "devolveme"
+        "lista", "listame", "listado",
+        "dame", "dime", "digame", "digame", "dime los", "dime las",
+        "mostrar", "muéstrame", "muestrame", "mostrame", "mostrarme",
+        "ver", "quiero ver", "necesito ver",
+        "traeme", "tráeme", "traigame",
+        "devuelveme", "devolveme",
+        "enseñame", "ensenname",
+        "obten", "obtener", "consigue", "conseguir",
+        "presenta", "presentame",
+        "busca", "buscar", "encuentra", "encontrar",
+        "muestra", "muestrame",
     ])
 
 def _diagnose_node_process_sync(cmd: List[str], env: Dict[str, str], cwd: Optional[str], seconds: int = 5):
@@ -215,6 +224,22 @@ def _extract_total_from_paginated(payload: Any) -> Optional[int]:
         except Exception:
             return None
     return None
+
+def _flatten_patient_row(row: Dict[str, Any]) -> Dict[str, Any]:
+    """Aplana un objeto paciente: extrae campos de persona y elimina campos internos."""
+    persona = row.get("persona") or {}
+    if not persona and isinstance(row.get("patient"), dict):
+        persona = row["patient"].get("persona") or {}
+    nombre = " ".join(filter(None, [persona.get("nombre"), persona.get("apellidos")])) or None
+    return {
+        "id": row.get("id") or row.get("patient_id") or row.get("patients_id"),
+        "nombre": nombre,
+        "ci": persona.get("ci"),
+        "sexo": persona.get("sexo"),
+        "telefono": persona.get("telf1") or persona.get("telf2"),
+        "fecha_nacimiento": (persona.get("fecha_nacimiento") or "")[:10] or None,
+        "estado": row.get("estado"),
+    }
 
 def _to_rows_payload(payload: Any) -> Dict[str, Any]:
     if isinstance(payload, list):
@@ -655,7 +680,7 @@ class MedicalAgentMCP:
 
         res = await self.tools.call("patient_filter", {
             "filters": filters,
-            "limit": 20,
+            "limit": 100,
             "sort": {"field": "id", "direction": "desc"},
         })
         rows = _unwrap_list(res)
@@ -664,7 +689,9 @@ class MedicalAgentMCP:
         if total <= 0:
             return {"answer": "No se encontraron pacientes.", "data": payload, "steps": 2}
 
-        answer = _render_patients_list(payload["rows"], total=total, limit=20)
+        flat_rows = [_flatten_patient_row(r) for r in payload["rows"]]
+        payload["rows"] = flat_rows
+        answer = _render_patients_list(flat_rows, total=total, limit=100)
         return {"answer": answer, "data": payload, "steps": 2}
 
     async def _pagos(self, question: str, want_count: bool) -> Optional[Dict[str, Any]]:

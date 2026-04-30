@@ -1,5 +1,23 @@
 export type FilterSpec = { field: string; op: string; value?: any };
 
+const INTERNAL_FIELDS = new Set([
+  "created_at", "updated_at", "deleted_at",
+  "num_seguro", "empresa_seg", "ref_medica",
+  "person_id", "pivot",
+]);
+
+export function stripInternalFields(row: any): any {
+  if (!row || typeof row !== "object" || Array.isArray(row)) return row;
+  const out: any = {};
+  for (const [k, v] of Object.entries(row)) {
+    if (INTERNAL_FIELDS.has(k)) continue;
+    out[k] = typeof v === "object" && v !== null && !Array.isArray(v)
+      ? stripInternalFields(v)
+      : v;
+  }
+  return out;
+}
+
 export function getByPath(obj: any, path: string) {
   if (!path) return undefined;
   const parts = path.split(".").filter(Boolean);
@@ -128,7 +146,7 @@ export function applyFilterPipeline(params: {
   const start = (page - 1) * pageSize;
   const paged = out.slice(start, start + pageSize);
 
-  const finalItems =
+  const selectedItems =
     Array.isArray(select) && select.length
       ? paged.map((item: any) => {
           const obj: any = {};
@@ -136,6 +154,8 @@ export function applyFilterPipeline(params: {
           return obj;
         })
       : paged;
+
+  const finalItems = selectedItems.map(stripInternalFields);
 
   return { total, page, pageSize, returned: finalItems.length, items: finalItems };
 }
