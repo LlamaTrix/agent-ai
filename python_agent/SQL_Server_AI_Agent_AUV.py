@@ -459,7 +459,7 @@ class NodeMCPToolsProxy:
 
         self.allowed_tools = {
             "person_list","person_get",
-            "patient_list","patient_get","patient_search",
+            "patient_list","patient_get","patient_search","patient_filter",
             "citas_list","citas_by_patient","citas_filter",
             "visitas_by_patient","visitas_by_cita",
             "antecedents_get","antecedents_filter",
@@ -628,11 +628,11 @@ class MedicalAgentMCP:
 
         ci_like = _extract_ci_like(question)
         if ci_like:
-            filters.append({"field": "persona.ci", "op": "like", "value": str(ci_like)})
+            filters.append({"field": "persona.ci", "op": "contains", "value": str(ci_like)})
 
         nombre_like = _extract_nombre(question)
         if nombre_like:
-            filters.append({"field": "persona.nombre", "op": "like", "value": nombre_like})
+            filters.append({"field": "persona.nombre", "op": "contains", "value": nombre_like})
 
         dr = _extract_date_exact_or_range(question)
         if dr:
