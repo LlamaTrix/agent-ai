@@ -328,9 +328,9 @@ def _extract_date_exact_or_range(question: str) -> Optional[Tuple[str, str]]:
 
 def _extract_sexo(question: str) -> Optional[str]:
     t = _strip_accents_lc(question or "")
-    if re.search(r"\b(f|femenino|mujer|mujeres)\b", t):
+    if re.search(r"\b(f|femenino|femeninas|mujer|mujeres)\b", t):
         return "femenino"
-    if re.search(r"\b(m|masculino|hombre|hombres|varon|varones)\b", t):
+    if re.search(r"\b(m|masculino|masculinos|hombre|hombres|varon|varones)\b", t):
         return "masculino"
     return None
 
