@@ -236,9 +236,10 @@ def _pick_first(row: Dict[str, Any], keys: List[str]) -> Optional[str]:
 
 def _format_patient_line(row: Dict[str, Any]) -> str:
     pid = _pick_first(row, ["patient_id", "patients_id", "id", "patientId"])
-    ci  = _pick_first(row, ["ci", "carnet", "dni", "documento", "persons_ci", "person_ci"])
-    nombre = _pick_first(row, ["nombre", "nombres", "first_name", "firstname"])
-    apellidos = _pick_first(row, ["apellidos", "paterno", "materno", "last_name", "lastname"])
+    persona = row.get("persona", {}) if isinstance(row.get("persona"), dict) else {}
+    ci  = _pick_first(persona, ["ci", "carnet", "dni", "documento"]) or _pick_first(row, ["ci", "carnet", "dni", "documento", "persons_ci", "person_ci"])
+    nombre = _pick_first(persona, ["nombre", "nombres", "first_name", "firstname"]) or _pick_first(row, ["nombre", "nombres", "first_name", "firstname"])
+    apellidos = _pick_first(persona, ["apellidos", "paterno", "materno", "last_name", "lastname"]) or _pick_first(row, ["apellidos", "paterno", "materno", "last_name", "lastname"])
     full = " ".join([x for x in [nombre, apellidos] if x]) or _pick_first(row, ["full_name", "nombre_completo"])
     bits = []
     if pid: bits.append(f"ID:{pid}")
@@ -606,14 +607,14 @@ class MedicalAgentMCP:
         return {"answer": answer, "data": payload, "steps": 4}
 
     async def _patients_via_patient_search(self, question: str, want_count: bool) -> Optional[Dict[str, Any]]:
-        if "patient_search" not in self.tools.allowed_tools:
+        if "patient_filter" not in self.tools.allowed_tools:
             return None
 
         filters: List[Dict[str, Any]] = []
 
         sexo = _extract_sexo(question)
         if sexo:
-            filters.append({"field": "persons.sexo", "op": "eq", "value": sexo})
+            filters.append({"field": "persona.sexo", "op": "eq", "value": sexo})
 
         age_cmp = _extract_age_comparator(question)
         if age_cmp:
@@ -623,15 +624,15 @@ class MedicalAgentMCP:
         blood = _extract_blood_type(question)
         if blood:
             # lo mandamos como tú lo venías haciendo
-            filters.append({"field": "antecedents.sangre", "op": "eq", "value": blood})
+            filters.append({"field": "persona.sangre", "op": "eq", "value": blood})
 
         ci_like = _extract_ci_like(question)
         if ci_like:
-            filters.append({"field": "persons.ci", "op": "like", "value": str(ci_like)})
+            filters.append({"field": "persona.ci", "op": "like", "value": str(ci_like)})
 
         nombre_like = _extract_nombre(question)
         if nombre_like:
-            filters.append({"field": "nombre", "op": "like", "value": nombre_like})
+            filters.append({"field": "persona.nombre", "op": "like", "value": nombre_like})
 
         dr = _extract_date_exact_or_range(question)
         if dr:
@@ -640,30 +641,19 @@ class MedicalAgentMCP:
 
         # consulta real (con filtros)
         if want_count:
-            res = await self.tools.call("patient_search", {
+            res = await self.tools.call("patient_filter", {
                 "filters": filters,
-                "per_page": 1,
-                "flat": False,
-                "sort_by": "patients.id",
-                "sort_dir": "desc",
+                "limit": 1000,  # limitar para count aproximado
             })
-            total = _extract_total_from_paginated(res)
-            if total is None:
-                rows = _unwrap_list(res)
-                payload = _to_rows_payload(rows)
-                return {"answer": f"Total: {payload['row_count']}.", "data": payload, "steps": 2}
+            rows = _unwrap_list(res)
+            total = len(rows)
+            payload = _to_rows_payload(rows)
+            return {"answer": f"Total aproximado: {total} (limitado a 1000).", "data": payload, "steps": 2}
 
-            # si el usuario pidió sangre y el total coincide sospechosamente con baseline, fallback
-            if blood:
-                _log_mcp(f"[CHECK] count con sangre={blood} total={total} (no se puede comparar fiable sin total baseline)")
-            return {"answer": f"Total: {total}.", "data": {"rows": [], "row_count": total, "raw": res}, "steps": 2}
-
-        res = await self.tools.call("patient_search", {
+        res = await self.tools.call("patient_filter", {
             "filters": filters,
-            "per_page": 20,
-            "flat": True,
-            "sort_by": "patients.id",
-            "sort_dir": "desc",
+            "limit": 20,
+            "sort": {"field": "id", "direction": "desc"},
         })
         rows = _unwrap_list(res)
         payload = _to_rows_payload(rows)
