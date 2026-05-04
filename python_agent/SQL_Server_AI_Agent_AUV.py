@@ -389,15 +389,18 @@ def _extract_nombre(question: str) -> Optional[str]:
     """Extrae un nombre propio de la pregunta eliminando palabras clave del sistema."""
     _STOP = {
         "paciente", "pacientes", "cita", "citas", "visita", "visitas",
-        "lista", "listame", "listado", "dame", "mostrar", "muéstrame", "muestrame",
+        "lista", "listame", "listado", "dame", "dime", "digame", "mostrar", "muéstrame", "muestrame",
         "ver", "traeme", "tráeme", "buscar", "busca", "busco", "encontrar",
+        "devuelveme", "devolveme", "traigame", "obten", "obtener", "consigue",
+        "conseguir", "presenta", "presentame", "enseñame", "ensenname",
+        "muestra", "mostrame", "mostrarme", "quiero", "necesito",
         "cuantos", "cuántos", "total", "hay", "el", "la", "los", "las",
         "de", "del", "con", "para", "que", "como", "quien", "quién",
         "un", "una", "unos", "unas", "en", "al", "se", "datos", "informacion",
         "información", "nombre", "apellido", "llamado", "llama", "apellidos",
         "mujer", "mujeres", "hombre", "hombres", "masculino", "femenino",
         "varon", "varones", "mayor", "mayores", "menor", "menores",
-        "anos", "edad", "sangre", "tipo", "sangre",
+        "anos", "edad", "sangre", "tipo",
     }
     tokens = re.findall(r"[a-záéíóúüñ]+", _strip_accents_lc(question or ""), re.IGNORECASE)
     # quedarse con tokens que no son stopwords y tienen más de 2 letras
@@ -700,7 +703,7 @@ class MedicalAgentMCP:
 
         flat_rows = [_flatten_patient_row(r) for r in payload["rows"]]
         payload["rows"] = flat_rows
-        answer = _render_patients_list(flat_rows, total=total, limit=100)
+        answer = f"Encontré {total} pacientes."
         excel_b64 = _rows_to_excel_b64(flat_rows, sheet_name="Pacientes")
         return {"answer": answer, "data": payload, "steps": 2, "excel_bytes": excel_b64, "excel_name": "pacientes.xlsx"}
 
