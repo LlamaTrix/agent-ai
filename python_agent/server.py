@@ -18,7 +18,7 @@ from SQL_Server_AI_Agent_AUV import ask_with_embedded_mcp  # ✅ usar directo
 ALLOW_ORIGINS = [
     o.strip() for o in os.getenv(
         "ALLOW_ORIGINS",
-        "http://localhost:3000"
+        "http://localhost:3000,https://agente-ai.rocazit.com"
     ).split(",") if o.strip()
 ]
 
