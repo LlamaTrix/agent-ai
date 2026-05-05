@@ -108,7 +108,12 @@ def _redact_pii(obj: Any) -> Any:
 # =========================================================
 # LLM
 # =========================================================
+_llm_client_cache: Optional[Any] = None
+
 def _build_llm_client():
+    global _llm_client_cache
+    if _llm_client_cache is not None:
+        return _llm_client_cache
     provider = os.getenv("LLM_PROVIDER", "openai_compat").strip().lower()
     if provider == "azure":
         from openai import AzureOpenAI
@@ -127,7 +132,8 @@ def _build_llm_client():
             timeout=LLM_TIMEOUT,
         )
         model = os.getenv("LLAMA_MODEL", "llama3.2:1b")
-    return client, model
+    _llm_client_cache = (client, model)
+    return _llm_client_cache
 
 # =========================================================
 # Utilidades
@@ -149,16 +155,16 @@ def _is_list_request(q: str) -> bool:
     t = _strip_accents_lc(q or "")
     return any(w in t for w in [
         "lista", "listame", "listado",
-        "dame", "dime", "digame", "digame", "dime los", "dime las",
-        "mostrar", "muéstrame", "muestrame", "mostrame", "mostrarme",
+        "dame", "dime", "digame",
+        "mostrar", "muestrame", "mostrame", "mostrarme",
         "ver", "quiero ver", "necesito ver",
-        "traeme", "tráeme", "traigame",
+        "traeme", "traigame",
         "devuelveme", "devolveme",
-        "enseñame", "ensenname",
+        "ensenname",
         "obten", "obtener", "consigue", "conseguir",
         "presenta", "presentame",
         "busca", "buscar", "encuentra", "encontrar",
-        "muestra", "muestrame",
+        "muestra",
     ])
 
 def _diagnose_node_process_sync(cmd: List[str], env: Dict[str, str], cwd: Optional[str], seconds: int = 5):
@@ -288,18 +294,6 @@ def _rows_to_excel_b64(rows: List[Dict[str, Any]], sheet_name: str = "Resultados
     except Exception:
         return None
 
-def _fingerprint_patient_ids(rows: List[Dict[str, Any]], n: int = 10) -> Tuple[str, ...]:
-    """
-    Huella simple para detectar “mismo top 20”: si los primeros ids no cambian, el filtro fue ignorado.
-    """
-    out: List[str] = []
-    for r in (rows or [])[:n]:
-        if isinstance(r, dict):
-            pid = r.get("patient_id") or r.get("patients_id") or r.get("id")
-            if pid is not None:
-                out.append(str(pid))
-    return tuple(out)
-
 # =========================================================
 # Extractores (sexo/ci/sangre/fechas)
 # =========================================================
@@ -362,9 +356,9 @@ def _extract_date_exact_or_range(question: str) -> Optional[Tuple[str, str]]:
 
 def _extract_sexo(question: str) -> Optional[str]:
     t = _strip_accents_lc(question or "")
-    if re.search(r"\b(f|femenino|femeninas|mujer|mujeres)\b", t):
+    if re.search(r"\b(femenino|femeninos|femenina|femeninas|mujer|mujeres)\b", t):
         return "femenino"
-    if re.search(r"\b(m|masculino|masculinos|hombre|hombres|varon|varones)\b", t):
+    if re.search(r"\b(masculino|masculinos|hombre|hombres|varon|varones)\b", t):
         return "masculino"
     return None
 
@@ -385,29 +379,16 @@ def _extract_blood_type(question: str) -> Optional[str]:
         return f"{grp}{sign}"
     return None
 
+_NAME_TRIGGER_RE = re.compile(
+    r"\b(?:llamad[ao]s?|ll[aá]mase|se llama[n]?|de nombre|con nombre|apellidad[ao]s?|apellido)\s+"
+    r"([A-ZÁÉÍÓÚÜÑa-záéíóúüñ]{2,}(?:\s+[A-ZÁÉÍÓÚÜÑa-záéíóúüñ]{2,})?)",
+    re.IGNORECASE,
+)
+
 def _extract_nombre(question: str) -> Optional[str]:
-    """Extrae un nombre propio de la pregunta eliminando palabras clave del sistema."""
-    _STOP = {
-        "paciente", "pacientes", "cita", "citas", "visita", "visitas",
-        "lista", "listame", "listado", "dame", "dime", "digame", "mostrar", "muéstrame", "muestrame",
-        "ver", "traeme", "tráeme", "buscar", "busca", "busco", "encontrar",
-        "devuelveme", "devolveme", "traigame", "obten", "obtener", "consigue",
-        "conseguir", "presenta", "presentame", "enseñame", "ensenname",
-        "muestra", "mostrame", "mostrarme", "quiero", "necesito",
-        "cuantos", "cuántos", "total", "hay", "el", "la", "los", "las",
-        "de", "del", "con", "para", "que", "como", "quien", "quién",
-        "un", "una", "unos", "unas", "en", "al", "se", "datos", "informacion",
-        "información", "nombre", "apellido", "llamado", "llama", "apellidos",
-        "mujer", "mujeres", "hombre", "hombres", "masculino", "femenino",
-        "varon", "varones", "mayor", "mayores", "menor", "menores",
-        "anos", "edad", "sangre", "tipo",
-    }
-    tokens = re.findall(r"[a-záéíóúüñ]+", _strip_accents_lc(question or ""), re.IGNORECASE)
-    # quedarse con tokens que no son stopwords y tienen más de 2 letras
-    candidates = [t for t in tokens if t not in _STOP and len(t) > 2]
-    if candidates:
-        return candidates[0]  # tomar el primer candidato (nombre más probable)
-    return None
+    """Solo extrae un nombre cuando hay un disparador explícito ('llamado X', 'de nombre X', etc.)."""
+    m = _NAME_TRIGGER_RE.search(question or "")
+    return m.group(1).strip() if m else None
 
 def _extract_age_comparator(question: str) -> Optional[Tuple[str, int]]:
     q = _strip_accents_lc(question or "")
@@ -466,8 +447,6 @@ DEFAULT_TOOL_ALIASES: Dict[str, str] = {
     "list_citas": "citas_list",
     "citas_by_patient_id": "citas_by_patient",
     "list_visitas": "visitas_by_patient",
-    "patients_search": "patient_search",
-    "search_patients": "patient_search",
 }
 
 class NodeMCPToolsProxy:
@@ -498,15 +477,14 @@ class NodeMCPToolsProxy:
             return
 
         self.allowed_tools = {
-            "person_list","person_get",
-            "patient_list","patient_get","patient_search","patient_filter",
-            "citas_list","citas_by_patient","citas_filter",
-            "visitas_by_patient","visitas_by_cita",
-            "antecedents_get","antecedents_filter",
-            "payments_list","payments_by_patient","payments_statistics",
-            "estudios_by_patient","estudios_by_cita",
-            "recetas_by_visita",
+            "person_list", "person_get", "person_filter",
+            "patient_list", "patient_get", "patient_filter",
+            "citas_list", "citas_by_patient", "citas_filter",
+            "visitas_by_patient", "visitas_by_cita", "visitas_filter",
+            "antecedents_get", "antecedents_filter", "antecedents_unique_surgical",
+            "payments_list", "payments_statistics",
             "dashboard_stats",
+            "filter_json", "clinic_bundle",
         }
         _log_mcp(f"[TOOLS] using hardcoded list: {len(self.allowed_tools)} tools")
 
@@ -560,92 +538,6 @@ class MedicalAgentMCP:
     def __init__(self, tools: NodeMCPToolsProxy):
         self.tools = tools
 
-    async def _patients_by_blood_fallback(self, blood: str, want_count: bool) -> Optional[Dict[str, Any]]:
-        """
-        Fallback porque patient_search está ignorando antecedents.sangre:
-        1) antecedents_filter(sangre=blood) -> patient_ids
-        2) patient_search(patients.id in ids) si soporta
-        3) patient_list + filtro client-side
-        """
-        if "antecedents_filter" not in self.tools.allowed_tools:
-            return None
-
-        _log_mcp(f"[FALLBACK] antecedents_filter sangre={blood}")
-
-        ares = await self.tools.call("antecedents_filter", {
-            "filters": [{"field": "sangre", "op": "eq", "value": blood}],
-            "page": 1,
-            "pageSize": 1000,
-        })
-
-        items = []
-        if isinstance(ares, dict) and isinstance(ares.get("items"), list):
-            items = ares["items"]
-
-        patient_ids: Set[Any] = set()
-        for it in items:
-            if isinstance(it, dict):
-                pid = it.get("patient_id") or it.get("patients_id") or it.get("patientId")
-                if pid is not None:
-                    patient_ids.add(pid)
-
-        if not patient_ids:
-            payload = {"rows": [], "row_count": 0, "raw": {"antecedents_filter": ares}}
-            return {"answer": f"No se encontraron pacientes con sangre {blood}.", "data": payload, "steps": 2}
-
-        # intentar patient_search con IN
-        if "patient_search" in self.tools.allowed_tools:
-            try:
-                res = await self.tools.call("patient_search", {
-                    "filters": [
-                        {"field": "patients.id", "op": "in", "value": sorted(list(patient_ids))},
-                    ],
-                    "per_page": 20 if not want_count else 1,
-                    "flat": (not want_count),
-                    "sort_by": "patients.id",
-                    "sort_dir": "desc",
-                })
-
-                if want_count:
-                    total = _extract_total_from_paginated(res)
-                    if total is None:
-                        rows = _unwrap_list(res)
-                        payload = _to_rows_payload(rows)
-                        return {"answer": f"Total: {payload['row_count']}.", "data": payload, "steps": 3}
-                    return {"answer": f"Total: {total}.", "data": {"rows": [], "row_count": total, "raw": {"antecedents_filter": ares, "patient_search": res}}, "steps": 3}
-
-                rows = _unwrap_list(res)
-                payload = _to_rows_payload(rows)
-                total = payload.get("row_count", 0)
-                answer = _render_patients_list(payload["rows"], total=total, limit=20) if total else f"No se encontraron pacientes con sangre {blood}."
-                return {"answer": answer, "data": payload, "steps": 3}
-
-            except Exception as e:
-                _log_mcp(f"[FALLBACK] patient_search IN failed: {e}")
-
-        # último recurso: patient_list + filtro client-side
-        if "patient_list" not in self.tools.allowed_tools:
-            payload = {"rows": [], "row_count": len(patient_ids), "raw": {"antecedents_filter": ares}}
-            return {"answer": f"Encontré {len(patient_ids)} pacientes con sangre {blood}, pero no pude listar detalles.", "data": payload, "steps": 3}
-
-        pres = await self.tools.call("patient_list", {})
-        prow = _unwrap_list(pres)
-        rows: List[Dict[str, Any]] = []
-        if isinstance(prow, list):
-            for r in prow:
-                if isinstance(r, dict):
-                    pid = r.get("id") or r.get("patient_id") or r.get("patients_id")
-                    if pid in patient_ids:
-                        rows.append(r)
-
-        payload = _to_rows_payload(rows)
-        if want_count:
-            return {"answer": f"Total: {payload['row_count']}.", "data": payload, "steps": 4}
-
-        total = payload.get("row_count", 0)
-        answer = _render_patients_list(payload["rows"], total=total, limit=20) if total else f"No se encontraron pacientes con sangre {blood}."
-        return {"answer": answer, "data": payload, "steps": 4}
-
     async def _patients_via_patient_search(self, question: str, want_count: bool) -> Optional[Dict[str, Any]]:
         if "patient_filter" not in self.tools.allowed_tools:
             return None
@@ -683,12 +575,14 @@ class MedicalAgentMCP:
         if want_count:
             res = await self.tools.call("patient_filter", {
                 "filters": filters,
-                "limit": 1000,  # limitar para count aproximado
+                "pageSize": 1,
             })
-            rows = _unwrap_list(res)
-            total = len(rows)
-            payload = _to_rows_payload(rows)
-            return {"answer": f"Total aproximado: {total} (limitado a 1000).", "data": payload, "steps": 2}
+            # pipeline devuelve { total, items, ... } — total = conteo real pre-paginación
+            total = res.get("total") if isinstance(res, dict) else None
+            if total is None:
+                rows = _unwrap_list(res)
+                total = len(rows) if isinstance(rows, list) else 0
+            return {"answer": f"Total de pacientes: {total}.", "data": {"rows": [], "row_count": total}, "steps": 2}
 
         res = await self.tools.call("patient_filter", {
             "filters": filters,
@@ -740,26 +634,20 @@ class MedicalAgentMCP:
     async def _visitas(self, question: str, want_count: bool) -> Optional[Dict[str, Any]]:
         if "visitas_by_patient" not in self.tools.allowed_tools:
             return None
-        # extraer patient_id de la pregunta si menciona un número
         m = re.search(r"\b(\d+)\b", question)
-        if m and "visitas_by_patient" in self.tools.allowed_tools:
-            patient_id = int(m.group(1))
-            res = await self.tools.call("visitas_by_patient", {"patient_id": patient_id})
-            rows = res if isinstance(res, list) else []
-            payload = _to_rows_payload(rows)
-            total = payload.get("row_count", 0)
-            return {"answer": f"Encontré {total} visitas para el paciente ID {patient_id}.", "data": payload, "steps": 1}
-        return None
+        if not m:
+            return {"answer": "Para consultar visitas necesito el ID del paciente. Ejemplo: 'visitas del paciente 42'.", "data": {"rows": [], "row_count": 0}, "steps": 0}
+        patient_id = int(m.group(1))
+        res = await self.tools.call("visitas_by_patient", {"patient_id": str(patient_id)})
+        rows = _unwrap_list(res) if isinstance(res, dict) else (res if isinstance(res, list) else [])
+        payload = _to_rows_payload(rows)
+        total = payload.get("row_count", 0)
+        return {"answer": f"Encontré {total} visitas para el paciente ID {patient_id}.", "data": payload, "steps": 1}
 
     async def _estudios(self, question: str, want_count: bool) -> Optional[Dict[str, Any]]:
         m = re.search(r"\b(\d+)\b", question)
-        if m and "estudios_by_patient" in self.tools.allowed_tools:
-            patient_id = int(m.group(1))
-            res = await self.tools.call("estudios_by_patient", {"patient_id": patient_id})
-            rows = res if isinstance(res, list) else []
-            payload = _to_rows_payload(rows)
-            total = payload.get("row_count", 0)
-            return {"answer": f"Encontré {total} estudios para el paciente ID {patient_id}.", "data": payload, "steps": 1}
+        if not m:
+            return {"answer": "Para consultar estudios necesito el ID del paciente. Ejemplo: 'estudios del paciente 42'.", "data": {"rows": [], "row_count": 0}, "steps": 0}
         return None
 
     async def _dashboard(self) -> Optional[Dict[str, Any]]:
@@ -805,7 +693,7 @@ class MedicalAgentMCP:
                 return out
 
         # Pacientes
-        if _is_patients_intent(q):
+        if _is_patients_intent(q) and (wants_count or is_list):
             out = await self._patients_via_patient_search(question, want_count=wants_count)
             if out:
                 return out

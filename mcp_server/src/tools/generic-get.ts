@@ -28,15 +28,15 @@ const tools: ToolDef[] = [
 
   {
     name: "visitas_by_patient",
-    description: "GET /v1/visitas/patient/{patientId}",
-    path: "/v1/visitas/patient/{patientId}",
-    inputShape: { patientId: z.string() },
+    description: "GET /v1/visitas/patient/{patient_id}",
+    path: "/v1/visitas/patient/{patient_id}",
+    inputShape: { patient_id: z.string() },
   },
   {
     name: "visitas_by_cita",
-    description: "GET /v1/visitas/{citaId}",
-    path: "/v1/visitas/{citaId}",
-    inputShape: { citaId: z.string() },
+    description: "GET /v1/visitas/{cita_id}",
+    path: "/v1/visitas/{cita_id}",
+    inputShape: { cita_id: z.string() },
   },
 
   { name: "antecedents_unique_surgical", description: "GET /v1/antecedents/surgical", path: "/v1/antecedents/surgical" },

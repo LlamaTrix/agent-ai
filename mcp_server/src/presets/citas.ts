@@ -22,8 +22,8 @@ export function buildCitasPresetFilters(preset: any) {
   if (preset?.tipo_evento) filters.push({ field: "tipo_evento", op: "eq", value: preset.tipo_evento });
   if (preset?.motivo) filters.push({ field: "motivo", op: "contains", value: preset.motivo });
 
-  if (preset?.fecha_from) filters.push({ field: "fecha", op: "gte", value: preset.fecha_from });
-  if (preset?.fecha_to) filters.push({ field: "fecha", op: "lte", value: preset.fecha_to });
+  if (preset?.fecha_from) filters.push({ field: "hora_inicio", op: "gte", value: preset.fecha_from });
+  if (preset?.fecha_to) filters.push({ field: "hora_inicio", op: "lte", value: preset.fecha_to });
 
   if (preset?.q) search = { text: preset.q, fields: ["motivo", "comentarios", "estado", "tipo_evento"] };
   return { filters, search };

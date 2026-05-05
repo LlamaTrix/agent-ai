@@ -3,7 +3,7 @@ export type FilterSpec = { field: string; op: string; value?: any };
 const INTERNAL_FIELDS = new Set([
   "created_at", "updated_at", "deleted_at",
   "num_seguro", "empresa_seg", "ref_medica",
-  "person_id", "pivot",
+  "pivot",
 ]);
 
 export function stripInternalFields(row: any): any {
@@ -140,9 +140,10 @@ export function applyFilterPipeline(params: {
     });
   }
 
+  const total = out.length;
+
   if (limit) out = out.slice(0, limit);
 
-  const total = out.length;
   const start = (page - 1) * pageSize;
   const paged = out.slice(start, start + pageSize);
 
