@@ -542,7 +542,9 @@ class MedicalAgentMCP:
         if "patient_filter" not in self.tools.allowed_tools:
             return None
 
-        filters: List[Dict[str, Any]] = []
+        filters: List[Dict[str, Any]] = [
+            {"field": "estado", "op": "eq", "value": 1},
+        ]
 
         sexo = _extract_sexo(question)
         if sexo:
@@ -587,16 +589,20 @@ class MedicalAgentMCP:
         res = await self.tools.call("patient_filter", {
             "filters": filters,
             "limit": 100,
+            "pageSize": 100,
             "sort": {"field": "id", "direction": "desc"},
         })
+        true_total = res.get("total") if isinstance(res, dict) else None
         rows = _unwrap_list(res)
         payload = _to_rows_payload(rows)
-        total = payload.get("row_count", 0)
-        if total <= 0:
+        returned = payload.get("row_count", 0)
+        if returned <= 0:
             return {"answer": "No se encontraron pacientes.", "data": payload, "steps": 2}
 
         flat_rows = [_flatten_patient_row(r) for r in payload["rows"]]
         payload["rows"] = flat_rows
+        total = true_total if true_total is not None else returned
+        payload["row_count"] = total
         answer = f"Encontré {total} pacientes."
         excel_b64 = _rows_to_excel_b64(flat_rows, sheet_name="Pacientes")
         return {"answer": answer, "data": payload, "steps": 2, "excel_bytes": excel_b64, "excel_name": "pacientes.xlsx"}
