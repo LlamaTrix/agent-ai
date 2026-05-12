@@ -96,12 +96,13 @@ Herramientas:
 
 Filtros: field+op+value. Ops: eq,neq,gt,gte,lt,lte,contains.
 Pacientes: persona.sexo(Femenino/Masculino/Otro), persona.nombre, persona.apellidos, persona.ci
-Citas: hora_inicio(YYYY-MM-DD HH:MM:SS), estado, tipo_evento, patient_id
+Citas: hora_inicio(formato ISO: 2026-04-07T03:36:32.000000Z), estado, tipo_evento, patient_id
 
 Ejemplos:
 "pacientes"->{{"tool":"patient_filter","args":{{"limit":1000}}}}
 "mujeres"->{{"tool":"patient_filter","args":{{"filters":[{{"field":"persona.sexo","op":"eq","value":"Femenino"}}],"limit":1000}}}}
-"citas hoy"->{{"tool":"citas_filter","args":{{"filters":[{{"field":"hora_inicio","op":"gte","value":"{today} 00:00:00"}},{{"field":"hora_inicio","op":"lte","value":"{today} 23:59:59"}}],"limit":1000}}}}
+"citas hoy"->{{"tool":"citas_filter","args":{{"filters":[{{"field":"hora_inicio","op":"gte","value":"{today}T00:00:00"}},{{"field":"hora_inicio","op":"lte","value":"{today}T23:59:59"}}],"limit":1000}}}}
+"citas abril 2026"->{{"tool":"citas_filter","args":{{"filters":[{{"field":"hora_inicio","op":"gte","value":"2026-04-01T00:00:00"}},{{"field":"hora_inicio","op":"lte","value":"2026-04-30T23:59:59"}}],"limit":1000}}}}
 "pagos"->{{"tool":"payments_statistics","args":{{}}}}
 "dashboard"->{{"tool":"dashboard_stats","args":{{}}}}
 "visitas paciente 5"->{{"tool":"visitas_by_patient","args":{{"patient_id":"5"}}}}
@@ -149,7 +150,7 @@ def _flatten_patient_row(row: Dict[str, Any]) -> Dict[str, Any]:
         "id": row.get("id") or row.get("patient_id"),
         "nombre": nombre,
         "ci": persona.get("ci"),
-        "sexo": persona.get("sexo"),
+        "sexo": persona.get("sexo") or "Sin género",
         "telefono": persona.get("telf1") or persona.get("telf2"),
         "fecha_nacimiento": (persona.get("fecha_nacimiento") or "")[:10] or None,
         "estado": row.get("estado"),
@@ -306,12 +307,16 @@ class MedicalAgentMCP:
             user_msg = f"Q: {question}\nDatos: {extra_context}"
         else:
             total = len(rows)
-            # Para conteos/agrupaciones manda todos los rows (son pocos campos tras el flatten)
-            # Para listas grandes recorta — el frontend ya muestra la tabla completa
-            sample = rows[:MAX_ROWS_TO_LLM]
-            data_str = json.dumps(sample, ensure_ascii=False, default=str, separators=(',', ':'))
-            suffix = f" ({len(sample)} de {total} mostrados)" if total > len(sample) else ""
-            user_msg = f"Q: {question}\nTotal:{total}{suffix}\n{data_str}"
+            # Siempre mandar todos los rows — el pipeline ya filtró, son pocos
+            # Solo recortar si son demasiados (query de lista completa sin filtro)
+            if total <= MAX_ROWS_TO_LLM:
+                data_str = json.dumps(rows, ensure_ascii=False, default=str, separators=(',', ':'))
+                user_msg = f"Q: {question}\nTotal:{total}\n{data_str}"
+            else:
+                # Lista grande — el LLM solo necesita saber el total
+                sample = rows[:MAX_ROWS_TO_LLM]
+                data_str = json.dumps(sample, ensure_ascii=False, default=str, separators=(',', ':'))
+                user_msg = f"Q: {question}\nTotal:{total} (muestra de {MAX_ROWS_TO_LLM}):\n{data_str}"
         return self._call_llm(ANALYZER_SYSTEM, user_msg, temperature=0)
 
     async def query(self, question: str) -> Dict[str, Any]:
