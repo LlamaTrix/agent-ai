@@ -116,7 +116,12 @@ _PLANNER_TOOLS = {
     "antecedents_get", "archivos_by_patient",
 }
 
-ANALYZER_SYSTEM = "Asistente medico SGP. Responde en español, breve y preciso. Usa solo los datos proporcionados."
+ANALYZER_SYSTEM = """\
+Asistente medico SGP. Responde en español, breve y preciso.
+Usa SOLO los datos proporcionados. No inventes ni asumas nada.
+Los datos ya vienen filtrados — el Total indica cuántos registros hay en el resultado.
+Nunca confundas un ID o número de paciente con una cantidad de registros.\
+"""
 
 # =========================================================
 # Utilidades
