@@ -103,6 +103,8 @@ Ejemplos:
 "mujeres"->{{"tool":"patient_filter","args":{{"filters":[{{"field":"persona.sexo","op":"eq","value":"Femenino"}}],"limit":1000}}}}
 "citas hoy"->{{"tool":"citas_filter","args":{{"filters":[{{"field":"hora_inicio","op":"gte","value":"{today}T00:00:00"}},{{"field":"hora_inicio","op":"lte","value":"{today}T23:59:59"}}],"limit":1000}}}}
 "citas abril 2026"->{{"tool":"citas_filter","args":{{"filters":[{{"field":"hora_inicio","op":"gte","value":"2026-04-01T00:00:00"}},{{"field":"hora_inicio","op":"lte","value":"2026-04-30T23:59:59"}}],"limit":1000}}}}
+"citas del paciente juan perez"->{{"tool":"citas_by_patient","args":{{"patient_id":"juan perez"}}}}
+"visitas del paciente maria lopez"->{{"tool":"visitas_by_patient","args":{{"patient_id":"maria lopez"}}}}
 "pagos"->{{"tool":"payments_statistics","args":{{}}}}
 "dashboard"->{{"tool":"dashboard_stats","args":{{}}}}
 "visitas paciente 5"->{{"tool":"visitas_by_patient","args":{{"patient_id":"5"}}}}
@@ -325,24 +327,34 @@ class MedicalAgentMCP:
         return self._call_llm(ANALYZER_SYSTEM, user_msg, temperature=0)
 
     async def _resolve_patient_id(self, name: str) -> Optional[str]:
-        """Busca un paciente por nombre y devuelve su ID numérico."""
+        """Busca un paciente por nombre/apellido y devuelve su ID numérico."""
         _log(f"[RESOLVE] buscando patient_id para nombre='{name}'")
-        raw = await self.tools.call("patient_filter", {
-            "filters": [{"field": "persona.nombre", "op": "contains", "value": name}],
-            "limit": 5,
-        })
-        rows = _unwrap_rows(raw)
-        if not rows:
-            # intentar también por apellidos
-            raw = await self.tools.call("patient_filter", {
-                "filters": [{"field": "persona.apellidos", "op": "contains", "value": name}],
-                "limit": 5,
-            })
-            rows = _unwrap_rows(raw)
-        if rows:
-            pid = rows[0].get("id") or rows[0].get("patient_id")
-            _log(f"[RESOLVE] encontrado id={pid}")
-            return str(pid) if pid is not None else None
+        parts = name.strip().split()
+
+        # Intentar con cada parte del nombre (nombre o apellido)
+        for part in parts:
+            if len(part) < 3:
+                continue
+            for field in ("persona.nombre", "persona.apellidos"):
+                raw = await self.tools.call("patient_filter", {
+                    "filters": [{"field": field, "op": "contains", "value": part}],
+                    "limit": 10,
+                })
+                rows = _unwrap_rows(raw)
+                if rows:
+                    # si hay varios, intentar afinar con otra parte del nombre
+                    if len(rows) > 1 and len(parts) > 1:
+                        other_parts = [p for p in parts if p != part and len(p) >= 3]
+                        for row in rows:
+                            persona = row.get("persona", {})
+                            full = f"{persona.get('nombre','')} {persona.get('apellidos','')}".lower()
+                            if any(p.lower() in full for p in other_parts):
+                                pid = row.get("id") or row.get("patient_id")
+                                _log(f"[RESOLVE] encontrado id={pid} ({full})")
+                                return str(pid) if pid is not None else None
+                    pid = rows[0].get("id") or rows[0].get("patient_id")
+                    _log(f"[RESOLVE] encontrado id={pid}")
+                    return str(pid) if pid is not None else None
         return None
 
     async def query(self, question: str) -> Dict[str, Any]:
