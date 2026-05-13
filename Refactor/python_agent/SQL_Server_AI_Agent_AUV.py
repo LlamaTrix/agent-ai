@@ -324,6 +324,27 @@ class MedicalAgentMCP:
                 user_msg = f"Q: {question}\nTotal:{total} (muestra de {MAX_ROWS_TO_LLM}):\n{data_str}"
         return self._call_llm(ANALYZER_SYSTEM, user_msg, temperature=0)
 
+    async def _resolve_patient_id(self, name: str) -> Optional[str]:
+        """Busca un paciente por nombre y devuelve su ID numérico."""
+        _log(f"[RESOLVE] buscando patient_id para nombre='{name}'")
+        raw = await self.tools.call("patient_filter", {
+            "filters": [{"field": "persona.nombre", "op": "contains", "value": name}],
+            "limit": 5,
+        })
+        rows = _unwrap_rows(raw)
+        if not rows:
+            # intentar también por apellidos
+            raw = await self.tools.call("patient_filter", {
+                "filters": [{"field": "persona.apellidos", "op": "contains", "value": name}],
+                "limit": 5,
+            })
+            rows = _unwrap_rows(raw)
+        if rows:
+            pid = rows[0].get("id") or rows[0].get("patient_id")
+            _log(f"[RESOLVE] encontrado id={pid}")
+            return str(pid) if pid is not None else None
+        return None
+
     async def query(self, question: str) -> Dict[str, Any]:
         # ── Paso 1: planificar ──────────────────────────────
         plan = self._plan(question)
@@ -339,6 +360,34 @@ class MedicalAgentMCP:
                 temperature=0.3,
             )
             return {"answer": answer, "data": {"rows": [], "row_count": 0}, "steps": 1}
+
+        # ── Paso 1b: resolver nombre → patient_id si hace falta ────
+        # Si el tool necesita un patient_id pero el planificador puso un string no numérico
+        _ID_ARGS = {"patient_id", "patientId"}
+        for id_field in _ID_ARGS:
+            val = args.get(id_field)
+            if val and not str(val).isdigit():
+                # es un nombre, no un ID — resolver
+                resolved = await self._resolve_patient_id(str(val))
+                if resolved:
+                    args[id_field] = resolved
+                    _log(f"[RESOLVE] {id_field} '{val}' → '{resolved}'")
+                else:
+                    return {
+                        "answer": f"No encontré ningún paciente con el nombre '{val}'.",
+                        "data": {"rows": [], "row_count": 0},
+                        "steps": 2,
+                    }
+
+        # Si es citas_filter con patient_id como nombre en filters, resolver también
+        if tool_name in ("citas_filter", "citas_by_patient", "visitas_by_patient",
+                         "estudios_by_patient", "pagos_by_patient", "payments_by_patient"):
+            for f in args.get("filters", []):
+                if f.get("field") == "patient_id" and not str(f.get("value", "")).isdigit():
+                    resolved = await self._resolve_patient_id(str(f["value"]))
+                    if resolved:
+                        f["value"] = resolved
+                        _log(f"[RESOLVE] filter patient_id '{f['value']}' → '{resolved}'")
 
         # ── Paso 2: ejecutar tool ───────────────────────────
         try:
