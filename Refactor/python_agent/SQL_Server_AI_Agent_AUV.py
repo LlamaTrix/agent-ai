@@ -414,6 +414,24 @@ class MedicalAgentMCP:
         # ── Paso 4: LLM analiza ─────────────────────────────
         answer = self._analyze(question, rows, extra_context=extra_context)
 
+        # La tabla refleja exactamente lo que devolvió el MCP.
+        # Si el LLM dice "no hay" pero el MCP sí tiene datos, el LLM se equivocó —
+        # en ese caso reemplazamos la respuesta con una automática basada en los datos reales.
+        _NO_RESULT_PHRASES = ("no hay", "no existe", "no encontré", "no encontre",
+                              "ningún", "ningun", "vacía", "vacia", "sin registros", "no se encontr")
+        llm_says_empty = any(p in answer.lower() for p in _NO_RESULT_PHRASES)
+
+        if llm_says_empty and rows:
+            # LLM se equivocó — generar respuesta automática coherente con los datos
+            noun = "registros"
+            if "patient" in tool_name: noun = "pacientes"
+            elif "cita" in tool_name: noun = "citas"
+            elif "visita" in tool_name: noun = "visitas"
+            elif "payment" in tool_name or "pago" in tool_name: noun = "pagos"
+            elif "estudio" in tool_name: noun = "estudios"
+            answer = f"Encontré {len(rows)} {noun}."
+            _log(f"[SYNC] LLM dijo vacío pero MCP devolvió {len(rows)} rows — respuesta corregida")
+
         # ── Paso 5: Excel ───────────────────────────────────
         sheet = tool_name.split("_")[0].capitalize()
         excel_b64 = _rows_to_excel_b64(rows, sheet_name=sheet) if rows else None
