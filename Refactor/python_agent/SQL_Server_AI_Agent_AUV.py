@@ -38,7 +38,7 @@ MCP_INIT_TIMEOUT = int(os.getenv("MCP_INIT_TIMEOUT", "60"))
 MCP_TOOL_TIMEOUT = int(os.getenv("MCP_TOOL_TIMEOUT", "30"))
 LLM_TIMEOUT      = int(os.getenv("LLM_TIMEOUT", "60"))
 OVERALL_TIMEOUT  = int(os.getenv("OVERALL_TIMEOUT", "120"))
-MAX_ROWS_TO_LLM  = int(os.getenv("MAX_ROWS_TO_LLM", "300"))
+MAX_ROWS_TO_LLM  = int(os.getenv("MAX_ROWS_TO_LLM", "100"))
 
 DEBUG_MCP    = os.getenv("DEBUG_MCP", "0").strip().lower() in ("1", "true", "yes")
 MCP_LOG_FILE = os.getenv("MCP_LOG_FILE", "").strip()
@@ -62,8 +62,20 @@ def _log(msg: str) -> None:
 # =========================================================
 # LLM
 # =========================================================
-def _build_llm_client():
+def _build_llm_clients():
+    """
+    Devuelve (thinker_client, thinker_model, answerer_client, answerer_model).
+
+    LLM_THINKER — planificador: decide qué tool llamar y con qué args (solo JSON).
+    LLM_ANSWERER   — analizador: genera respuesta en lenguaje natural.
+
+    Si LLM_THINKER_BASE_URL / LLM_THINKER_MODEL no están definidos,
+    el thinker reutiliza el mismo cliente que el answerer (sin costo extra).
+    """
+    from openai import OpenAI
+
     provider = os.getenv("LLM_PROVIDER", "openai_compat").strip().lower()
+
     if provider == "azure":
         from openai import AzureOpenAI
         client = AzureOpenAI(
@@ -73,15 +85,33 @@ def _build_llm_client():
             timeout=LLM_TIMEOUT,
         )
         model = os.getenv("AZURE_OPENAI_DEPLOYMENT", "gpt-4")
-    else:
-        from openai import OpenAI
-        client = OpenAI(
-            api_key=os.getenv("LLAMA_API_KEY", "dummy-key"),
-            base_url=os.getenv("LLAMA_BASE_URL", "http://localhost:11434/v1"),
+        return client, model, client, model
+
+    # Answerer — genera la respuesta final (modelo grande, Groq)
+    answerer_client = OpenAI(
+        api_key=os.getenv("LLM_ANSWERER_API_KEY", "dummy-key"),
+        base_url=os.getenv("LLM_ANSWERER_BASE_URL", "http://localhost:11434/v1"),
+        timeout=LLM_TIMEOUT,
+    )
+    answerer_model = os.getenv("LLM_ANSWERER_MODEL", "llama-3.3-70b-versatile")
+
+    # Thinker — solo devuelve JSON con tool+args (puede ser modelo local pequeño)
+    thinker_base_url = os.getenv("LLM_THINKER_BASE_URL", "").strip()
+    thinker_model    = os.getenv("LLM_THINKER_MODEL", "").strip()
+
+    if thinker_base_url and thinker_model:
+        thinker_client = OpenAI(
+            api_key="ollama",
+            base_url=thinker_base_url,
             timeout=LLM_TIMEOUT,
         )
-        model = os.getenv("LLAMA_MODEL", "llama3.2:3b")
-    return client, model
+        _log(f"[LLM] thinker={thinker_model}@{thinker_base_url} | answerer={answerer_model}")
+    else:
+        thinker_client = answerer_client
+        thinker_model  = answerer_model
+        _log(f"[LLM] single model={answerer_model}")
+
+    return thinker_client, thinker_model, answerer_client, answerer_model
 
 # =========================================================
 # Prompts
@@ -126,22 +156,6 @@ OPERADORES de filtro: eq, neq, gt, gte, lt, lte, contains
 - Para cumpleaños del mes/día: filtra persona.fecha_nacimiento con contains sobre el mes/día
 - Para edad: calcula el año de nacimiento y usa gt/lt en persona.fecha_nacimiento
 - Para pacientes inactivos: estado eq false
-
-═══ EJEMPLOS ═══
-"pacientes"->{{"tool":"patient_filter","args":{{"limit":1000}}}}
-"pacientes mujeres"->{{"tool":"patient_filter","args":{{"filters":[{{"field":"persona.sexo","op":"eq","value":"Femenino"}}],"limit":1000}}}}
-"pacientes sin género"->{{"tool":"patient_filter","args":{{"filters":[{{"field":"persona.sexo","op":"eq","value":"Sin género"}}],"limit":1000}}}}
-"citas hoy"->{{"tool":"citas_filter","args":{{"filters":[{{"field":"hora_inicio","op":"gte","value":"{today}T00:00:00"}},{{"field":"hora_inicio","op":"lte","value":"{today}T23:59:59"}}],"limit":1000}}}}
-"citas de mayo 2026"->{{"tool":"citas_filter","args":{{"filters":[{{"field":"hora_inicio","op":"gte","value":"2026-05-01T00:00:00"}},{{"field":"hora_inicio","op":"lte","value":"2026-05-31T23:59:59"}}],"limit":1000}}}}
-"citas pendientes"->{{"tool":"citas_filter","args":{{"filters":[{{"field":"estado","op":"eq","value":"pendiente"}}],"limit":1000}}}}
-"citas del paciente juan perez"->{{"tool":"citas_by_patient","args":{{"patient_id":"juan perez"}}}}
-"visitas del paciente maria"->{{"tool":"visitas_by_patient","args":{{"patient_id":"maria"}}}}
-"pagos del paciente ivan"->{{"tool":"payments_by_patient","args":{{"patientId":"ivan"}}}}
-"cumpleaños en mayo"->{{"tool":"patient_filter","args":{{"filters":[{{"field":"persona.fecha_nacimiento","op":"contains","value":"-05-"}}],"limit":1000}}}}
-"estadísticas pagos"->{{"tool":"payments_statistics","args":{{}}}}
-"dashboard"->{{"tool":"dashboard_stats","args":{{}}}}
-"estudios del paciente 400"->{{"tool":"estudios_by_patient","args":{{"patient_id":"400"}}}}
-"recetas de la visita 1368"->{{"tool":"recetas_by_visita","args":{{"visitaId":"1368"}}}}
 """
 
 # Tools curadas que el planificador ve — evita saturar con las 26
@@ -151,7 +165,7 @@ _PLANNER_TOOLS = {
     "dashboard_stats", "payments_statistics", "payments_by_patient", "payments_list",
     "estudios_by_patient", "estudios_by_cita",
     "recetas_by_visita", "notas_by_cita", "archivos_by_patient",
-    "antecedents_get",
+    "antecedents_get", "clinic_bundle",
 }
 
 ANALYZER_SYSTEM = """\
@@ -272,6 +286,7 @@ class NodeMCPToolsProxy:
                 "antecedents_get", "antecedents_filter",
                 "payments_list", "payments_statistics",
                 "estudios_by_patient", "dashboard_stats",
+                "clinic_bundle",
             }
 
     def tools_description(self) -> str:
@@ -311,14 +326,22 @@ class NodeMCPToolsProxy:
 # Agent
 # =========================================================
 class MedicalAgentMCP:
-    def __init__(self, tools: NodeMCPToolsProxy, llm_client, model_name: str):
-        self.tools = tools
-        self.llm = llm_client
-        self.model = model_name
+    def __init__(
+        self,
+        tools: NodeMCPToolsProxy,
+        thinker_client, thinker_model: str,
+        answerer_client,   answerer_model: str,
+    ):
+        self.tools          = tools
+        self.thinker        = thinker_client
+        self.thinker_model  = thinker_model
+        self.answerer          = answerer_client
+        self.answerer_model    = answerer_model
 
-    def _call_llm(self, system: str, user: str, temperature: float = 0, json_mode: bool = False) -> str:
+    def _call_llm(self, client, model: str, system: str, user: str,
+                  temperature: float = 0, json_mode: bool = False) -> str:
         kwargs: Dict[str, Any] = dict(
-            model=self.model,
+            model=model,
             messages=[
                 {"role": "system", "content": system},
                 {"role": "user", "content": user},
@@ -328,41 +351,40 @@ class MedicalAgentMCP:
         )
         if json_mode:
             kwargs["response_format"] = {"type": "json_object"}
-        resp = self.llm.chat.completions.create(**kwargs)
+        resp = client.chat.completions.create(**kwargs)
         return resp.choices[0].message.content or ""
 
     def _plan(self, question: str) -> Dict[str, Any]:
-        """Paso 1: LLM decide qué tool llamar y con qué args."""
+        """Thinker: decide qué tool llamar y con qué args (devuelve JSON)."""
         today = _local_today()
         system = PLANNER_SYSTEM.format(
             tools_desc=self.tools.tools_description(),
             today=today,
         )
-        raw = self._call_llm(system, question, temperature=0, json_mode=True)
-        _log(f"[PLANNER] response: {raw[:300]}")
+        raw = self._call_llm(self.thinker, self.thinker_model,
+                             system, question, temperature=0, json_mode=True)
+        _log(f"[THINKER] response: {raw[:300]}")
         plan = _extract_json(raw)
         if not plan:
-            _log("[PLANNER] failed to parse JSON")
+            _log("[THINKER] failed to parse JSON")
             return {"tool": None, "args": {}}
         return plan
 
     def _analyze(self, question: str, rows: List[Dict], extra_context: str = "") -> str:
-        """Paso 3: LLM analiza los datos y genera respuesta."""
+        """Asker: analiza los datos y genera respuesta en lenguaje natural."""
         if extra_context:
             user_msg = f"Q: {question}\nDatos: {extra_context}"
         else:
             total = len(rows)
-            # Siempre mandar todos los rows — el pipeline ya filtró, son pocos
-            # Solo recortar si son demasiados (query de lista completa sin filtro)
             if total <= MAX_ROWS_TO_LLM:
                 data_str = json.dumps(rows, ensure_ascii=False, default=str, separators=(',', ':'))
                 user_msg = f"Q: {question}\nTotal:{total}\n{data_str}"
             else:
-                # Lista grande — el LLM solo necesita saber el total
                 sample = rows[:MAX_ROWS_TO_LLM]
                 data_str = json.dumps(sample, ensure_ascii=False, default=str, separators=(',', ':'))
                 user_msg = f"Q: {question}\nTotal:{total} (muestra de {MAX_ROWS_TO_LLM}):\n{data_str}"
-        return self._call_llm(ANALYZER_SYSTEM, user_msg, temperature=0)
+        return self._call_llm(self.answerer, self.answerer_model,
+                              ANALYZER_SYSTEM, user_msg, temperature=0)
 
     async def _resolve_patient_id(self, name: str) -> Optional[str]:
         """Busca un paciente por nombre/apellido y devuelve su ID numérico."""
@@ -453,7 +475,7 @@ class MedicalAgentMCP:
         # ── Paso 3: normalizar rows ─────────────────────────
         rows = _unwrap_rows(raw)
 
-        if "patient" in tool_name:
+        if tool_name in ("patient_filter", "patient_list", "patient_get"):
             rows = [_flatten_patient_row(r) for r in rows]
 
         # para tools que devuelven dict plano (stats, dashboard)
@@ -522,7 +544,7 @@ async def ask_with_embedded_mcp(question: str) -> Dict[str, Any]:
     server_params = StdioServerParameters(command=cmd[0], args=cmd[1:], env=env, cwd=node_cwd)
     _log(f"Starting MCP: {node_entry}")
 
-    llm_client, model_name = _build_llm_client()
+    thinker_client, thinker_model, answerer_client, answerer_model = _build_llm_clients()
 
     try:
         with anyio.fail_after(OVERALL_TIMEOUT):
@@ -535,7 +557,11 @@ async def ask_with_embedded_mcp(question: str) -> Dict[str, Any]:
                     tools = NodeMCPToolsProxy(session)
                     await tools.refresh_allowed_tools()
 
-                    agent = MedicalAgentMCP(tools, llm_client, model_name)
+                    agent = MedicalAgentMCP(
+                        tools,
+                        thinker_client, thinker_model,
+                        answerer_client, answerer_model,
+                    )
                     return await agent.query(question)
 
     except TimeoutError:
