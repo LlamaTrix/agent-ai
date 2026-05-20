@@ -87,42 +87,79 @@ def _build_llm_client():
 # Prompts
 # =========================================================
 PLANNER_SYSTEM = """\
-Sistema medico SGP. Elige la herramienta y devuelve SOLO JSON.
+Eres el planificador del sistema médico SGP. Devuelve SOLO JSON válido.
 Formato: {{"tool":"nombre","args":{{}}}} o {{"tool":null,"args":{{}}}} si no aplica.
 Hoy: {today}
 
-Herramientas:
+═══ HERRAMIENTAS ═══
 {tools_desc}
 
-Filtros: field+op+value. Ops: eq,neq,gt,gte,lt,lte,contains.
-Pacientes: persona.sexo(Femenino/Masculino/Otro), persona.nombre, persona.apellidos, persona.ci
-Citas: hora_inicio(formato ISO: 2026-04-07T03:36:32.000000Z), estado, tipo_evento, patient_id
+═══ ESQUEMA DE DATOS ═══
+PACIENTES (patient_filter):
+  persona.nombre, persona.apellidos, persona.ci, persona.sangre
+  persona.sexo → valores exactos: Femenino | Masculino | Otro | (null=Sin género)
+  persona.fecha_nacimiento → ISO: 2026-04-06T04:00:00.000000Z
+  persona.ocupacion, persona.direccion, persona.telf1, persona.telf2
+  estado → true=activo | false=inactivo
 
-Ejemplos:
+CITAS (citas_filter / citas_by_patient):
+  hora_inicio, hora_fin → ISO: 2026-04-07T03:36:32.000000Z
+  estado → "cerrada" | "en curso" | "pendiente" | "cancelada"
+  tipo_evento → "Consulta" | "Control" | "Urgencia" | otros
+  motivo, comentarios, patient_id
+
+VISITAS (visitas_by_patient / visitas_by_cita):
+  motivo, diagnostico, conducta, comentarios
+  peso, altura, temperatura, f_cardiaca, f_respiratoria
+  p_arterial_1, p_arterial_5
+  patient_id, cita_id
+
+PAGOS (payments_by_patient / payments_statistics / payments_list):
+  monto, saldo, metodo → "Efectivo"|"Transferencia"|"Tarjeta"
+  motivo, patient_id
+
+OPERADORES de filtro: eq, neq, gt, gte, lt, lte, contains
+
+═══ REGLAS ═══
+- Si la query menciona un nombre de paciente para citas/visitas/pagos → usa citas_by_patient/visitas_by_patient/payments_by_patient con patient_id=<nombre> (el sistema lo resolverá a ID automáticamente)
+- Nunca uses patient_id con un nombre en citas_filter — usa citas_by_patient
+- Para cumpleaños del mes/día: filtra persona.fecha_nacimiento con contains sobre el mes/día
+- Para edad: calcula el año de nacimiento y usa gt/lt en persona.fecha_nacimiento
+- Para pacientes inactivos: estado eq false
+
+═══ EJEMPLOS ═══
 "pacientes"->{{"tool":"patient_filter","args":{{"limit":1000}}}}
-"mujeres"->{{"tool":"patient_filter","args":{{"filters":[{{"field":"persona.sexo","op":"eq","value":"Femenino"}}],"limit":1000}}}}
+"pacientes mujeres"->{{"tool":"patient_filter","args":{{"filters":[{{"field":"persona.sexo","op":"eq","value":"Femenino"}}],"limit":1000}}}}
+"pacientes sin género"->{{"tool":"patient_filter","args":{{"filters":[{{"field":"persona.sexo","op":"eq","value":"Sin género"}}],"limit":1000}}}}
 "citas hoy"->{{"tool":"citas_filter","args":{{"filters":[{{"field":"hora_inicio","op":"gte","value":"{today}T00:00:00"}},{{"field":"hora_inicio","op":"lte","value":"{today}T23:59:59"}}],"limit":1000}}}}
-"citas abril 2026"->{{"tool":"citas_filter","args":{{"filters":[{{"field":"hora_inicio","op":"gte","value":"2026-04-01T00:00:00"}},{{"field":"hora_inicio","op":"lte","value":"2026-04-30T23:59:59"}}],"limit":1000}}}}
+"citas de mayo 2026"->{{"tool":"citas_filter","args":{{"filters":[{{"field":"hora_inicio","op":"gte","value":"2026-05-01T00:00:00"}},{{"field":"hora_inicio","op":"lte","value":"2026-05-31T23:59:59"}}],"limit":1000}}}}
+"citas pendientes"->{{"tool":"citas_filter","args":{{"filters":[{{"field":"estado","op":"eq","value":"pendiente"}}],"limit":1000}}}}
 "citas del paciente juan perez"->{{"tool":"citas_by_patient","args":{{"patient_id":"juan perez"}}}}
-"visitas del paciente maria lopez"->{{"tool":"visitas_by_patient","args":{{"patient_id":"maria lopez"}}}}
-"pagos"->{{"tool":"payments_statistics","args":{{}}}}
+"visitas del paciente maria"->{{"tool":"visitas_by_patient","args":{{"patient_id":"maria"}}}}
+"pagos del paciente ivan"->{{"tool":"payments_by_patient","args":{{"patientId":"ivan"}}}}
+"cumpleaños en mayo"->{{"tool":"patient_filter","args":{{"filters":[{{"field":"persona.fecha_nacimiento","op":"contains","value":"-05-"}}],"limit":1000}}}}
+"estadísticas pagos"->{{"tool":"payments_statistics","args":{{}}}}
 "dashboard"->{{"tool":"dashboard_stats","args":{{}}}}
-"visitas paciente 5"->{{"tool":"visitas_by_patient","args":{{"patient_id":"5"}}}}
+"estudios del paciente 400"->{{"tool":"estudios_by_patient","args":{{"patient_id":"400"}}}}
+"recetas de la visita 1368"->{{"tool":"recetas_by_visita","args":{{"visitaId":"1368"}}}}
 """
 
 # Tools curadas que el planificador ve — evita saturar con las 26
 _PLANNER_TOOLS = {
-    "patient_filter", "citas_filter", "visitas_by_patient", "visitas_by_cita",
-    "dashboard_stats", "payments_statistics", "payments_by_patient",
-    "estudios_by_patient", "recetas_by_visita", "notas_by_cita",
-    "antecedents_get", "archivos_by_patient",
+    "patient_filter", "citas_filter", "citas_by_patient",
+    "visitas_by_patient", "visitas_by_cita",
+    "dashboard_stats", "payments_statistics", "payments_by_patient", "payments_list",
+    "estudios_by_patient", "estudios_by_cita",
+    "recetas_by_visita", "notas_by_cita", "archivos_by_patient",
+    "antecedents_get",
 }
 
 ANALYZER_SYSTEM = """\
-Asistente medico SGP. Responde en español, breve y preciso.
-Usa SOLO los datos proporcionados. No inventes ni asumas nada.
-Los datos ya vienen filtrados — el Total indica cuántos registros hay en el resultado.
-Nunca confundas un ID o número de paciente con una cantidad de registros.\
+Eres el asistente médico del sistema SGP. Responde en español, de forma breve y precisa.
+Usa SOLO los datos proporcionados. No inventes ni asumas información.
+Los datos ya vienen filtrados — el campo Total indica exactamente cuántos registros hay.
+Nunca confundas un ID o número de paciente con una cantidad de visitas o registros.
+Si los datos incluyen fechas de nacimiento y preguntan por edad o cumpleaños, calcúlalo tú mismo.\
 """
 
 # =========================================================
@@ -296,9 +333,10 @@ class MedicalAgentMCP:
 
     def _plan(self, question: str) -> Dict[str, Any]:
         """Paso 1: LLM decide qué tool llamar y con qué args."""
+        today = _local_today()
         system = PLANNER_SYSTEM.format(
             tools_desc=self.tools.tools_description(),
-            today=_local_today(),
+            today=today,
         )
         raw = self._call_llm(system, question, temperature=0, json_mode=True)
         _log(f"[PLANNER] response: {raw[:300]}")
@@ -433,14 +471,18 @@ class MedicalAgentMCP:
                               "ningún", "ningun", "vacía", "vacia", "sin registros", "no se encontr")
         llm_says_empty = any(p in answer.lower() for p in _NO_RESULT_PHRASES)
 
+        _TOOL_NOUN = {
+            "patient_filter": "pacientes", "patient_list": "pacientes", "patient_get": "paciente",
+            "citas_filter": "citas", "citas_list": "citas", "citas_by_patient": "citas",
+            "visitas_by_patient": "visitas", "visitas_by_cita": "visitas",
+            "payments_list": "pagos", "payments_by_patient": "pagos",
+            "estudios_by_patient": "estudios", "estudios_by_cita": "estudios",
+            "recetas_by_visita": "recetas", "notas_by_cita": "notas",
+            "archivos_by_patient": "archivos", "antecedents_get": "antecedentes",
+        }
+
         if llm_says_empty and rows:
-            # LLM se equivocó — generar respuesta automática coherente con los datos
-            noun = "registros"
-            if "patient" in tool_name: noun = "pacientes"
-            elif "cita" in tool_name: noun = "citas"
-            elif "visita" in tool_name: noun = "visitas"
-            elif "payment" in tool_name or "pago" in tool_name: noun = "pagos"
-            elif "estudio" in tool_name: noun = "estudios"
+            noun = _TOOL_NOUN.get(tool_name, "registros")
             answer = f"Encontré {len(rows)} {noun}."
             _log(f"[SYNC] LLM dijo vacío pero MCP devolvió {len(rows)} rows — respuesta corregida")
 
