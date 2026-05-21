@@ -158,6 +158,7 @@ OPERADORES de filtro: eq, neq, gt, gte, lt, lte, contains, startsWith, endsWith,
 - Para pacientes inactivos: estado eq false
 - filters SIEMPRE debe ser una lista de objetos: {{"filters":[{{"field":"campo","op":"operador","value":"valor"}}]}}
 - Para "pacientes que empiezan con la letra M" usa patient_filter con field="persona.nombre", op="startsWith", value="M", limit=1000
+- Nunca uses este formato: {{"filters":{{"persona.nombre":{{"contains":"M"}}}}}}
 """
 
 # Tools curadas que el planificador ve — evita saturar con las 26
@@ -237,7 +238,7 @@ def _unwrap_rows(payload: Any) -> List[Dict[str, Any]]:
                 return v
     return []
 
-def _normalize_tool_args(args: Any) -> Dict[str, Any]:
+def _normalize_tool_args(args: Any, question: str = "") -> Dict[str, Any]:
     """Corrige formatos comunes que devuelve el planner antes de llamar al MCP."""
     if not isinstance(args, dict):
         return {}
@@ -246,7 +247,17 @@ def _normalize_tool_args(args: Any) -> Dict[str, Any]:
 
     filters = normalized.get("filters")
     if isinstance(filters, dict):
-        normalized["filters"] = [filters]
+        if all(k in filters for k in ("field", "op", "value")):
+            normalized["filters"] = [filters]
+        else:
+            converted_filters = []
+            for field, op_map in filters.items():
+                if isinstance(op_map, dict):
+                    for op, value in op_map.items():
+                        converted_filters.append({"field": field, "op": op, "value": value})
+                else:
+                    converted_filters.append({"field": field, "op": "eq", "value": op_map})
+            normalized["filters"] = converted_filters
     elif filters is None and isinstance(normalized.get("filter"), dict):
         normalized["filters"] = [normalized.pop("filter")]
 
@@ -269,6 +280,10 @@ def _normalize_tool_args(args: Any) -> Dict[str, Any]:
         if isinstance(f, dict) and isinstance(f.get("op"), str):
             key = f["op"].strip()
             f["op"] = op_aliases.get(key.lower(), key)
+            q = question.lower()
+            asks_prefix = any(word in q for word in ("empiec", "comien", "inici", "arranc"))
+            if asks_prefix and f["op"] == "contains" and f.get("field") in ("persona.nombre", "persona.apellidos", "nombre", "apellidos"):
+                f["op"] = "startsWith"
 
     return normalized
 
@@ -458,7 +473,7 @@ class MedicalAgentMCP:
         # ── Paso 1: planificar ──────────────────────────────
         plan = self._plan(question)
         tool_name = plan.get("tool")
-        args = _normalize_tool_args(plan.get("args") or {})
+        args = _normalize_tool_args(plan.get("args") or {}, question)
         _log(f"[PLAN] tool={tool_name} args={args}")
 
         # sin tool — LLM responde directo
