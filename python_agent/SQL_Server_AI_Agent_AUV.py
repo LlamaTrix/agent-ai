@@ -23,7 +23,7 @@ import hashlib
 import unicodedata
 import subprocess
 from typing import List, Dict, Any, Optional, Tuple, Set
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, date
 from zoneinfo import ZoneInfo
 
 import pandas as pd
@@ -147,6 +147,27 @@ def _strip_accents_lc(s: str) -> str:
 def _local_today() -> datetime:
     return datetime.now(ZoneInfo("America/La_Paz"))
 
+def _date_minus_years(base: date, years: int) -> date:
+    try:
+        return base.replace(year=base.year - years)
+    except ValueError:
+        # 29 de febrero: usar 28 de febrero en años no bisiestos.
+        return base.replace(year=base.year - years, day=28)
+
+def _birthdate_cutoff_for_age(years: int) -> str:
+    return _date_minus_years(_local_today().date(), years).strftime("%Y-%m-%d")
+
+def _calculate_age_from_birthdate(raw: Any) -> Optional[int]:
+    if not raw:
+        return None
+    try:
+        birth = datetime.fromisoformat(str(raw)[:10]).date()
+    except Exception:
+        return None
+    today = _local_today().date()
+    age = today.year - birth.year - ((today.month, today.day) < (birth.month, birth.day))
+    return age if age >= 0 else None
+
 def _is_count_request(q: str) -> bool:
     t = _strip_accents_lc(q or "")
     return any(p in t for p in ["cuantos", "cuántos", "cuanto", "total", "cantidad", "numero", "número", "conteo", "count"])
@@ -238,13 +259,15 @@ def _flatten_patient_row(row: Dict[str, Any]) -> Dict[str, Any]:
     if not persona and isinstance(row.get("patient"), dict):
         persona = row["patient"].get("persona") or {}
     nombre = " ".join(filter(None, [persona.get("nombre"), persona.get("apellidos")])) or None
+    fecha_nacimiento = (persona.get("fecha_nacimiento") or "")[:10] or None
     return {
         "id": row.get("id") or row.get("patient_id") or row.get("patients_id"),
         "nombre": nombre,
         "ci": persona.get("ci"),
         "sexo": persona.get("sexo"),
         "telefono": persona.get("telf1") or persona.get("telf2"),
-        "fecha_nacimiento": (persona.get("fecha_nacimiento") or "")[:10] or None,
+        "fecha_nacimiento": fecha_nacimiento,
+        "edad": _calculate_age_from_birthdate(fecha_nacimiento),
         "estado": row.get("estado"),
     }
 
@@ -392,17 +415,17 @@ def _extract_nombre(question: str) -> Optional[str]:
 
 def _extract_age_comparator(question: str) -> Optional[Tuple[str, int]]:
     q = _strip_accents_lc(question or "")
-    m = re.search(r"\bmayor(?:es)?\s*(?:a|de)\s*(\d{1,3})\b", q)
+    m = re.search(r"\b(?:mayor(?:es)?|mas)\s*(?:a|de|que)?\s*(\d{1,3})\s*(?:anos|ano|anios|edad)?\b", q)
     if m:
         return (">", int(m.group(1)))
-    m2 = re.search(r"\bmenor(?:es)?\s*(?:a|de)\s*(\d{1,3})\b", q)
+    m2 = re.search(r"\b(?:menor(?:es)?|menos)\s*(?:a|de|que)?\s*(\d{1,3})\s*(?:anos|ano|anios|edad)?\b", q)
     if m2:
         return ("<", int(m2.group(1)))
     return None
 
 def _is_patients_intent(q: str) -> bool:
     t = _strip_accents_lc(q or "")
-    return any(w in t for w in ["paciente", "pacientes", "tabla de paciente", "tablas de paciente"])
+    return any(w in t for w in ["paciente", "pacientes", "tabla de paciente", "tablas de paciente", "usuario", "usuarios"])
 
 def _is_citas_intent(q: str) -> bool:
     t = _strip_accents_lc(q or "")
@@ -553,7 +576,12 @@ class MedicalAgentMCP:
         age_cmp = _extract_age_comparator(question)
         if age_cmp:
             op_sym, n = age_cmp
-            filters.append({"field": "antecedents.edad", "op": "gt" if op_sym == ">" else "lt", "value": n})
+            cutoff = _birthdate_cutoff_for_age(n)
+            filters.append({
+                "field": "persona.fecha_nacimiento",
+                "op": "lt" if op_sym == ">" else "gt",
+                "value": cutoff,
+            })
 
         blood = _extract_blood_type(question)
         if blood:
