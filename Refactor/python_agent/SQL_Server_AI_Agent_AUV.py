@@ -18,6 +18,7 @@ import io
 import json
 import base64
 import subprocess
+import unicodedata
 from typing import List, Dict, Any, Optional, Set
 from datetime import datetime
 from zoneinfo import ZoneInfo
@@ -184,6 +185,36 @@ Si los datos incluyen fechas de nacimiento y preguntan por edad o cumpleaños, c
 # =========================================================
 def _local_today() -> str:
     return datetime.now(ZoneInfo("America/La_Paz")).strftime("%Y-%m-%d")
+
+def _strip_accents_lc(text: str) -> str:
+    return "".join(
+        c for c in unicodedata.normalize("NFD", (text or "").lower())
+        if unicodedata.category(c) != "Mn"
+    )
+
+def _clean_patient_name_fragment(fragment: str) -> str:
+    name = re.sub(r"\b(?:el|la|paciente|senor|señor|senora|señora|sr|sra)\b", " ", fragment, flags=re.IGNORECASE)
+    name = re.sub(r"[^\w\sáéíóúÁÉÍÓÚñÑüÜ]", " ", name)
+    return " ".join(name.split())
+
+def _extract_birthdate_patient_query(question: str) -> Optional[str]:
+    """Extrae nombre cuando la pregunta pide cumpleaños/nacimiento de un paciente."""
+    normalized = _strip_accents_lc(question)
+    if not any(term in normalized for term in ("cumpleanos", "nacimiento", "nacio", "fecha de nacimiento")):
+        return None
+
+    patterns = [
+        r"\b(?:cumpleanos|nacimiento|fecha de nacimiento)\s+(?:de|del|de la|para)\s+(.+)$",
+        r"\bcuando\s+nacio\s+(.+)$",
+    ]
+    for pattern in patterns:
+        m = re.search(pattern, normalized)
+        if not m:
+            continue
+        name = _clean_patient_name_fragment(question[m.start(1):m.end(1)])
+        if len(name) >= 3:
+            return name
+    return None
 
 def _extract_json(text: str) -> Optional[dict]:
     """Extrae el primer JSON válido del texto — tolerante a respuestas imperfectas del LLM."""
@@ -474,6 +505,19 @@ class MedicalAgentMCP:
         plan = self._plan(question)
         tool_name = plan.get("tool")
         args = _normalize_tool_args(plan.get("args") or {}, question)
+
+        birthdate_name = _extract_birthdate_patient_query(question)
+        if birthdate_name:
+            tool_name = "patient_filter"
+            args = {
+                "search": {
+                    "text": birthdate_name,
+                    "fields": ["persona.nombre", "persona.apellidos"],
+                },
+                "limit": 10,
+            }
+            _log(f"[ROUTE] birthdate patient lookup name='{birthdate_name}'")
+
         _log(f"[PLAN] tool={tool_name} args={args}")
 
         # sin tool — LLM responde directo
