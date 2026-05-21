@@ -409,9 +409,32 @@ _NAME_TRIGGER_RE = re.compile(
 )
 
 def _extract_nombre(question: str) -> Optional[str]:
-    """Solo extrae un nombre cuando hay un disparador explícito ('llamado X', 'de nombre X', etc.)."""
+    """Extrae un nombre propio de la pregunta con disparador o heurística simple."""
     m = _NAME_TRIGGER_RE.search(question or "")
-    return m.group(1).strip() if m else None
+    if m:
+        return m.group(1).strip()
+
+    q = _strip_accents_lc(question or "")
+    tokens = re.findall(r"[a-záéíóúüñ]+", q)
+    stop_words = {
+        "paciente", "pacientes", "cita", "citas", "visita", "visitas",
+        "lista", "listame", "listado", "dame", "mostrar", "muéstrame", "muestrame",
+        "ver", "traeme", "tráeme", "buscar", "busca", "busco", "encontrar",
+        "cuantos", "cuántos", "total", "hay", "el", "la", "los", "las",
+        "de", "del", "con", "para", "que", "como", "quien", "quién",
+        "un", "una", "unos", "unas", "en", "al", "se", "datos", "informacion",
+        "información", "nombre", "apellido", "llamado", "llama", "apellidos",
+        "historial", "atencion", "atención", "agenda", "turno", "consulta",
+        "ayer", "hoy", "manana", "pasado", "anteayer", "pago", "pagos",
+        "cobro", "cobros", "monto", "estadistica", "estadísticas", "resumen",
+        "general", "total", "listado", "personas", "persona",
+    }
+    candidates = [t for t in tokens if t not in stop_words and len(t) > 2]
+    if len(candidates) >= 2:
+        return " ".join(candidates[:2])
+    if len(candidates) == 1:
+        return candidates[0]
+    return None
 
 def _extract_age_comparator(question: str) -> Optional[Tuple[str, int]]:
     q = _strip_accents_lc(question or "")
@@ -437,7 +460,11 @@ def _is_pagos_intent(q: str) -> bool:
 
 def _is_visitas_intent(q: str) -> bool:
     t = _strip_accents_lc(q or "")
-    return any(w in t for w in ["visita", "visitas", "historial", "atencion", "atención"])
+    return any(w in t for w in [
+        "visita", "visitas", "historial", "atencion", "atención",
+        "atendimos", "atendió", "atendio", "atendido", "atendidos",
+        "vino", "llego", "llegó", "tratamos", "trató",
+    ])
 
 def _is_estudios_intent(q: str) -> bool:
     t = _strip_accents_lc(q or "")
@@ -561,6 +588,79 @@ class MedicalAgentMCP:
     def __init__(self, tools: NodeMCPToolsProxy):
         self.tools = tools
 
+    async def _resolve_patient_ids(self, question: str, max_ids: int = 5) -> List[Any]:
+        numeric = re.search(r"\b(\d{1,9})\b", question)
+        if numeric:
+            return [int(numeric.group(1))]
+
+        nombre_like = _extract_nombre(question)
+        ci_like = _extract_ci_like(question)
+        sexo = _extract_sexo(question)
+        blood = _extract_blood_type(question)
+        if not any([nombre_like, ci_like, sexo, blood]):
+            return []
+
+        ids: List[Any] = []
+        if "patient_filter" in self.tools.allowed_tools:
+            try:
+                filters: List[Dict[str, Any]] = []
+                if nombre_like:
+                    filters.append({"field": "persona.nombre", "op": "contains", "value": nombre_like})
+                if ci_like:
+                    filters.append({"field": "persona.ci", "op": "contains", "value": ci_like})
+                if sexo:
+                    filters.append({"field": "persona.sexo", "op": "eq", "value": sexo})
+                if blood:
+                    filters.append({"field": "persona.sangre", "op": "eq", "value": blood})
+
+                res = await self.tools.call("patient_filter", {
+                    "filters": filters,
+                    "limit": max_ids,
+                    "pageSize": max_ids,
+                })
+                rows = _unwrap_list(res)
+                for row in rows if isinstance(rows, list) else []:
+                    if isinstance(row, dict):
+                        pid = row.get("id") or row.get("patient_id") or row.get("patients_id")
+                        if pid is not None:
+                            ids.append(pid)
+                if ids:
+                    return ids[:max_ids]
+            except Exception as e:
+                _log_mcp(f"[RESOLVE] patient_filter failed: {e}")
+
+        if "patient_list" in self.tools.allowed_tools and (nombre_like or ci_like):
+            try:
+                query: Dict[str, Any] = {}
+                if nombre_like:
+                    query["q"] = nombre_like
+                if ci_like:
+                    query["ci"] = ci_like
+                res = await self.tools.call("patient_list", {"query": query} if query else {})
+                rows = _unwrap_list(res)
+                for row in rows if isinstance(rows, list) else []:
+                    if isinstance(row, dict):
+                        pid = row.get("id") or row.get("patient_id") or row.get("patients_id")
+                        if pid is None:
+                            continue
+                        if ci_like and str(row.get("ci", "")).find(ci_like) >= 0:
+                            ids.append(pid)
+                        elif nombre_like:
+                            patient_text = " ".join([
+                                str(row.get(k, "")) for k in [
+                                    "nombre", "nombres", "apellidos", "paterno", "materno",
+                                    "full_name", "nombre_completo",
+                                ]
+                            ])
+                            if _strip_accents_lc(patient_text).find(_strip_accents_lc(nombre_like)) >= 0:
+                                ids.append(pid)
+                if ids:
+                    return ids[:max_ids]
+            except Exception as e:
+                _log_mcp(f"[RESOLVE] patient_list failed: {e}")
+
+        return []
+
     async def _patients_via_patient_search(self, question: str, want_count: bool) -> Optional[Dict[str, Any]]:
         if "patient_filter" not in self.tools.allowed_tools:
             return None
@@ -666,23 +766,45 @@ class MedicalAgentMCP:
         return None
 
     async def _visitas(self, question: str, want_count: bool) -> Optional[Dict[str, Any]]:
-        if "visitas_by_patient" not in self.tools.allowed_tools:
+        if "visitas_filter" not in self.tools.allowed_tools and "visitas_by_patient" not in self.tools.allowed_tools:
             return None
-        m = re.search(r"\b(\d+)\b", question)
-        if not m:
-            return {"answer": "Para consultar visitas necesito el ID del paciente. Ejemplo: 'visitas del paciente 42'.", "data": {"rows": [], "row_count": 0}, "steps": 0}
-        patient_id = int(m.group(1))
-        res = await self.tools.call("visitas_by_patient", {"patient_id": str(patient_id)})
+
+        patient_ids = await self._resolve_patient_ids(question, max_ids=3)
+        if not patient_ids:
+            return None
+
+        patient_id = patient_ids[0]
+        if "visitas_filter" in self.tools.allowed_tools:
+            res = await self.tools.call("visitas_filter", {
+                "mode": "by_patient",
+                "patientId": str(patient_id),
+                "limit": 100,
+                "pageSize": 100,
+            })
+        else:
+            res = await self.tools.call("visitas_by_patient", {"patientId": str(patient_id)})
+
         rows = _unwrap_list(res) if isinstance(res, dict) else (res if isinstance(res, list) else [])
         payload = _to_rows_payload(rows)
         total = payload.get("row_count", 0)
+        if want_count:
+            return {"answer": f"Encontré {total} visitas para el paciente ID {patient_id}.", "data": {"rows": [], "row_count": total, "raw": res}, "steps": 1}
         return {"answer": f"Encontré {total} visitas para el paciente ID {patient_id}.", "data": payload, "steps": 1}
 
     async def _estudios(self, question: str, want_count: bool) -> Optional[Dict[str, Any]]:
-        m = re.search(r"\b(\d+)\b", question)
-        if not m:
-            return {"answer": "Para consultar estudios necesito el ID del paciente. Ejemplo: 'estudios del paciente 42'.", "data": {"rows": [], "row_count": 0}, "steps": 0}
-        return None
+        if "estudios_by_patient" not in self.tools.allowed_tools:
+            return None
+
+        patient_ids = await self._resolve_patient_ids(question, max_ids=1)
+        if not patient_ids:
+            return None
+
+        patient_id = patient_ids[0]
+        res = await self.tools.call("estudios_by_patient", {"patient_id": str(patient_id)})
+        rows = _unwrap_list(res) if isinstance(res, dict) else (res if isinstance(res, list) else [])
+        payload = _to_rows_payload(rows)
+        total = payload.get("row_count", 0)
+        return {"answer": f"Encontré {total} estudios para el paciente ID {patient_id}.", "data": payload, "steps": 1}
 
     async def _dashboard(self) -> Optional[Dict[str, Any]]:
         if "dashboard_stats" not in self.tools.allowed_tools:
@@ -698,13 +820,24 @@ class MedicalAgentMCP:
         if "citas_filter" not in self.tools.allowed_tools:
             return None
         dr = _extract_date_exact_or_range(question)
-        filters = []
+        filters: List[Dict[str, Any]] = []
         if dr:
             filters = [
                 {"field": "hora_inicio", "op": "gte", "value": dr[0]},
                 {"field": "hora_inicio", "op": "lte", "value": dr[1]},
             ]
-        args = {"filters": filters, "limit": 1000}
+
+        patient_ids = await self._resolve_patient_ids(question, max_ids=3)
+        args: Dict[str, Any] = {"limit": 1000}
+        if patient_ids:
+            if len(patient_ids) == 1:
+                args["patient_id"] = str(patient_ids[0])
+            else:
+                filters.append({"field": "patient_id", "op": "in", "value": patient_ids})
+
+        if filters:
+            args["filters"] = filters
+
         res = await self.tools.call("citas_filter", args)
         total = _extract_total_from_filter_tool(res) or 0
         if want_count:
@@ -726,21 +859,9 @@ class MedicalAgentMCP:
             if out:
                 return out
 
-        # Pacientes
-        if _is_patients_intent(q) and (wants_count or is_list):
-            out = await self._patients_via_patient_search(question, want_count=wants_count)
-            if out:
-                return out
-
         # Citas
         if _is_citas_intent(q):
             out = await self._citas_fastlane(question, want_count=wants_count)
-            if out:
-                return out
-
-        # Pagos
-        if _is_pagos_intent(q):
-            out = await self._pagos(question, want_count=wants_count)
             if out:
                 return out
 
@@ -753,6 +874,18 @@ class MedicalAgentMCP:
         # Estudios
         if _is_estudios_intent(q):
             out = await self._estudios(question, want_count=wants_count)
+            if out:
+                return out
+
+        # Pagos
+        if _is_pagos_intent(q):
+            out = await self._pagos(question, want_count=wants_count)
+            if out:
+                return out
+
+        # Pacientes
+        if _is_patients_intent(q) and (wants_count or is_list):
+            out = await self._patients_via_patient_search(question, want_count=wants_count)
             if out:
                 return out
 
