@@ -12,6 +12,7 @@ module.exports = {
       env: { PYTHONUNBUFFERED: "1" },
       max_restarts: 10,
       restart_delay: 3000,
+      kill_timeout: 30000,
     },
     {
       name: "agent-ui",
@@ -22,6 +23,7 @@ module.exports = {
       env: { PYTHONUNBUFFERED: "1" },
       max_restarts: 10,
       restart_delay: 3000,
+      kill_timeout: 10000,
     },
   ],
 };

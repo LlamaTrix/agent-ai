@@ -148,7 +148,7 @@ PAGOS (payments_by_patient / payments_statistics / payments_list):
   monto, saldo, metodo → "Efectivo"|"Transferencia"|"Tarjeta"
   motivo, patient_id
 
-OPERADORES de filtro: eq, neq, gt, gte, lt, lte, contains
+OPERADORES de filtro: eq, neq, gt, gte, lt, lte, contains, startsWith, endsWith, in, exists
 
 ═══ REGLAS ═══
 - Si la query menciona un nombre de paciente para citas/visitas/pagos → usa citas_by_patient/visitas_by_patient/payments_by_patient con patient_id=<nombre> (el sistema lo resolverá a ID automáticamente)
@@ -156,6 +156,8 @@ OPERADORES de filtro: eq, neq, gt, gte, lt, lte, contains
 - Para cumpleaños del mes/día: filtra persona.fecha_nacimiento con contains sobre el mes/día
 - Para edad: calcula el año de nacimiento y usa gt/lt en persona.fecha_nacimiento
 - Para pacientes inactivos: estado eq false
+- filters SIEMPRE debe ser una lista de objetos: {{"filters":[{{"field":"campo","op":"operador","value":"valor"}}]}}
+- Para "pacientes que empiezan con la letra M" usa patient_filter con field="persona.nombre", op="startsWith", value="M", limit=1000
 """
 
 # Tools curadas que el planificador ve — evita saturar con las 26
@@ -234,6 +236,41 @@ def _unwrap_rows(payload: Any) -> List[Dict[str, Any]]:
             if isinstance(v, list):
                 return v
     return []
+
+def _normalize_tool_args(args: Any) -> Dict[str, Any]:
+    """Corrige formatos comunes que devuelve el planner antes de llamar al MCP."""
+    if not isinstance(args, dict):
+        return {}
+
+    normalized = dict(args)
+
+    filters = normalized.get("filters")
+    if isinstance(filters, dict):
+        normalized["filters"] = [filters]
+    elif filters is None and isinstance(normalized.get("filter"), dict):
+        normalized["filters"] = [normalized.pop("filter")]
+
+    if "filters" not in normalized and all(k in normalized for k in ("field", "op", "value")):
+        normalized["filters"] = [{
+            "field": normalized.pop("field"),
+            "op": normalized.pop("op"),
+            "value": normalized.pop("value"),
+        }]
+
+    op_aliases = {
+        "startswith": "startsWith",
+        "starts_with": "startsWith",
+        "starts-with": "startsWith",
+        "endswith": "endsWith",
+        "ends_with": "endsWith",
+        "ends-with": "endsWith",
+    }
+    for f in normalized.get("filters", []) or []:
+        if isinstance(f, dict) and isinstance(f.get("op"), str):
+            key = f["op"].strip()
+            f["op"] = op_aliases.get(key.lower(), key)
+
+    return normalized
 
 def _diagnose_node_sync(cmd: List[str], env: dict, cwd: Optional[str], seconds: int = 5):
     _log("---- DIAG: spawning node process ----")
@@ -421,12 +458,14 @@ class MedicalAgentMCP:
         # ── Paso 1: planificar ──────────────────────────────
         plan = self._plan(question)
         tool_name = plan.get("tool")
-        args = plan.get("args") or {}
+        args = _normalize_tool_args(plan.get("args") or {})
         _log(f"[PLAN] tool={tool_name} args={args}")
 
         # sin tool — LLM responde directo
         if not tool_name or tool_name not in self.tools.allowed_tools:
             answer = self._call_llm(
+                self.answerer,
+                self.answerer_model,
                 ANALYZER_SYSTEM,
                 f"Pregunta: {question}\n\nNo hay datos disponibles del sistema para esta consulta.",
                 temperature=0.3,
