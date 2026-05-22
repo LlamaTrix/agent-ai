@@ -130,7 +130,12 @@ PACIENTES (patient_filter):
   persona.nombre, persona.apellidos, persona.ci, persona.sangre
   persona.sexo → valores exactos: Femenino | Masculino | Otro | (null=Sin género)
   persona.fecha_nacimiento → ISO: 2026-04-06T04:00:00.000000Z
-  persona.ocupacion, persona.direccion, persona.telf1, persona.telf2
+  persona.ocupacion, persona.direccion, persona.telf1, persona.telf2, persona.tel_referencia
+  persona.num_seguro, persona.empresa_seg, persona.estado_civil
+  Presets útiles: tiene_telefono (true/false), tiene_seguro (true/false), estado_civil, num_seguro, empresa_seg
+  Un paciente "sin teléfono" se detecta con tiene_telefono=false.
+  Un paciente "sin seguro" se detecta con tiene_seguro=false.
+  Un paciente "sin estado civil" se detecta con persona.estado_civil=null o not_exists.
   estado → true=activo | false=inactivo
 
 CITAS (citas_filter / citas_by_patient):
@@ -149,7 +154,7 @@ PAGOS (payments_by_patient / payments_statistics / payments_list):
   monto, saldo, metodo → "Efectivo"|"Transferencia"|"Tarjeta"
   motivo, patient_id
 
-OPERADORES de filtro: eq, neq, gt, gte, lt, lte, contains, startsWith, endsWith, in, exists
+OPERADORES de filtro: eq, neq, gt, gte, lt, lte, contains, startsWith, endsWith, in, exists, not_exists
 
 ═══ REGLAS ═══
 - Si la query menciona un nombre de paciente para citas/visitas/pagos → usa citas_by_patient/visitas_by_patient/payments_by_patient con patient_id=<nombre> (el sistema lo resolverá a ID automáticamente)

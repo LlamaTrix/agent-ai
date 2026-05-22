@@ -85,8 +85,12 @@ export function compareOp(a: any, op: string, b: any) {
       return a != null && String(a).toLowerCase().endsWith(String(b ?? "").toLowerCase());
     case "in":
       return Array.isArray(b) && b.some((x) => toComparable(x) === A);
+    case "not_exists":
+      return !(a !== undefined && a !== null && String(a) !== "");
     case "exists":
-      return a !== undefined && a !== null && String(a) !== "";
+      const exists = a !== undefined && a !== null && String(a) !== "";
+      if (b === false || b === "false" || b === 0) return !exists;
+      return exists;
     default:
       throw new Error(`Unsupported operator: ${op}`);
   }
@@ -107,6 +111,24 @@ export function applyFilterPipeline(params: {
 
   const arr = pickArray(input, arrayPath);
   let out = arr.slice();
+
+  // Add derived helper fields to simplify filters for common checks
+  for (const item of out) {
+    try {
+      const t1 = getByPath(item, "persona.telf1") ?? getByPath(item, "telf1");
+      const t2 = getByPath(item, "persona.telf2") ?? getByPath(item, "telf2");
+      const tref = getByPath(item, "persona.tel_referencia") ?? getByPath(item, "tel_referencia");
+      item.__has_phone = Boolean((t1 && String(t1).trim()) || (t2 && String(t2).trim()) || (tref && String(tref).trim()));
+
+      const numSeguro = getByPath(item, "persona.num_seguro") ?? getByPath(item, "num_seguro");
+      item.__has_seguro = Boolean(numSeguro && String(numSeguro).trim());
+
+      const estadoCivil = getByPath(item, "persona.estado_civil") ?? getByPath(item, "estado_civil");
+      item.__estado_civil = estadoCivil ?? null;
+    } catch (e) {
+      // ignore derivation errors
+    }
+  }
 
   out = out.filter((item: any) => {
     for (const f of filters) {

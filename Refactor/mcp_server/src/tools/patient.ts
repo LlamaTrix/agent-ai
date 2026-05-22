@@ -10,7 +10,7 @@ import { buildPatientPresetFilters, patientPresetSchema } from "../presets/patie
 export function registerPatientFilterTools(server: McpServer) {
   server.tool(
     "patient_filter",
-    "Filtra pacientes (/v1/patient). Soporta preset (campos de persona anidados) + filters/search manual.",
+    "Filtra pacientes (/v1/patient). Soporta preset (campos de persona anidados) + filters/search manual. Presets: tiene_telefono, tiene_seguro, num_seguro, empresa_seg, estado_civil.",
     { preset: z.object(patientPresetSchema).optional(), ...filterSchemaBase },
     async (args: any) => {
       if (!API_BASE_URL) return errPayload("patient_filter", "API_BASE_URL no está configurado en env.");

@@ -10,7 +10,7 @@ import { buildPersonPresetFilters, personPresetSchema } from "../presets/person.
 export function registerPersonTools(server: McpServer) {
   server.tool(
     "person_filter",
-    "Filtra personas (tabla persons). Soporta preset (campos reales) + filters/search manual.",
+    "Filtra personas (tabla persons). Soporta preset (campos reales) + filters/search manual. Presets: tiene_telefono, tiene_seguro, num_seguro, empresa_seg, estado_civil.",
     { preset: z.object(personPresetSchema).optional(), ...filterSchemaBase },
     async (args: any) => {
       if (!API_BASE_URL) return errPayload("person_filter", "API_BASE_URL no está configurado en env.");
