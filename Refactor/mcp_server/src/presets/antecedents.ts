@@ -4,13 +4,17 @@ import type { FilterSpec } from "../filters/pipeline.js";
 export const antecedentsPresetSchema = {
   id: z.union([z.string(), z.number()]).optional(),
   patient_id: z.union([z.string(), z.number()]).optional(),
-  hta: z.boolean().optional(),
-  dm: z.boolean().optional(),
+  hta: z.boolean().optional().describe("Hipertension arterial"),
+  dm: z.boolean().optional().describe("Diabetes mellitus"),
   alergias: z.boolean().optional(),
+  alergias_tipo: z.string().optional().describe("Tipo de alergia (medicamentos, alimentos, etc)"),
   quirurgicos: z.boolean().optional(),
-  fuma: z.boolean().optional(),
-  alcohol: z.boolean().optional(),
+  fuma: z.boolean().optional().describe("Fuma actualmente?"),
+  alcohol: z.boolean().optional().describe("Consume alcohol?"),
   donante: z.boolean().optional(),
+  enfermedades_cronicas: z.string().optional().describe("Enfermedad cronica especifica"),
+  medicacion_actual: z.string().optional().describe("Medicamento especifico"),
+  antecedentes_familiares: z.string().optional().describe("Enfermedad en familia"),
   q: z.string().optional().describe("Busca en descripciones y notas"),
 };
 
@@ -30,6 +34,10 @@ export function buildAntecedentsPresetFilters(preset: any) {
   if (preset?.fuma != null) filters.push({ field: "fuma", op: "eq", value: boolTo01(preset.fuma) });
   if (preset?.alcohol != null) filters.push({ field: "alcohol", op: "eq", value: boolTo01(preset.alcohol) });
   if (preset?.donante != null) filters.push({ field: "donante", op: "eq", value: boolTo01(preset.donante) });
+  if (preset?.alergias_tipo) filters.push({ field: "alergias_description", op: "contains", value: preset.alergias_tipo });
+  if (preset?.enfermedades_cronicas) filters.push({ field: "enfermedades_description", op: "contains", value: preset.enfermedades_cronicas });
+  if (preset?.medicacion_actual) filters.push({ field: "medicacion_description", op: "contains", value: preset.medicacion_actual });
+  if (preset?.antecedentes_familiares) filters.push({ field: "antecedentesfamiliares", op: "contains", value: preset.antecedentes_familiares });
 
   if (preset?.q) {
     search = {
