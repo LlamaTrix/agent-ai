@@ -132,10 +132,6 @@ PACIENTES (patient_filter):
   persona.fecha_nacimiento → ISO: 2026-04-06T04:00:00.000000Z
   persona.ocupacion, persona.direccion, persona.telf1, persona.telf2, persona.tel_referencia
   persona.num_seguro, persona.empresa_seg, persona.estado_civil
-  Presets útiles: tiene_telefono (true/false), tiene_seguro (true/false), estado_civil, num_seguro, empresa_seg
-  Un paciente "sin teléfono" se detecta con tiene_telefono=false.
-  Un paciente "sin seguro" se detecta con tiene_seguro=false.
-  Un paciente "sin estado civil" se detecta con persona.estado_civil=null o not_exists.
   estado → true=activo | false=inactivo
 
 CITAS (citas_filter / citas_by_patient):
@@ -156,6 +152,18 @@ PAGOS (payments_by_patient / payments_statistics / payments_list):
 
 OPERADORES de filtro: eq, neq, gt, gte, lt, lte, contains, startsWith, endsWith, in, exists, not_exists
 
+═══ PRESETS DE PACIENTES ═══
+patient_filter acepta un campo "preset" con booleanos y strings preconstruidos.
+USA SIEMPRE presets para estas consultas en vez de filters manuales:
+
+- "pacientes sin teléfono/número"     → {{"tool":"patient_filter","args":{{"preset":{{"tiene_telefono":false}},"limit":1000}}}}
+- "pacientes con teléfono/número"     → {{"tool":"patient_filter","args":{{"preset":{{"tiene_telefono":true}},"limit":1000}}}}
+- "pacientes sin seguro"              → {{"tool":"patient_filter","args":{{"preset":{{"tiene_seguro":false}},"limit":1000}}}}
+- "pacientes con seguro"              → {{"tool":"patient_filter","args":{{"preset":{{"tiene_seguro":true}},"limit":1000}}}}
+- "pacientes sin estado civil"        → {{"tool":"patient_filter","args":{{"filters":[{{"field":"persona.estado_civil","op":"not_exists"}}],"limit":1000}}}}
+- "pacientes con estado civil soltero"→ {{"tool":"patient_filter","args":{{"preset":{{"estado_civil":"Soltero/a"}},"limit":1000}}}}
+- "todos los pacientes"               → {{"tool":"patient_filter","args":{{"limit":1000}}}}
+
 ═══ REGLAS ═══
 - Si la query menciona un nombre de paciente para citas/visitas/pagos → usa citas_by_patient/visitas_by_patient/payments_by_patient con patient_id=<nombre> (el sistema lo resolverá a ID automáticamente)
 - Nunca uses patient_id con un nombre en citas_filter — usa citas_by_patient
@@ -165,6 +173,7 @@ OPERADORES de filtro: eq, neq, gt, gte, lt, lte, contains, startsWith, endsWith,
 - filters SIEMPRE debe ser una lista de objetos: {{"filters":[{{"field":"campo","op":"operador","value":"valor"}}]}}
 - Para "pacientes que empiezan con la letra M" usa patient_filter con field="persona.nombre", op="startsWith", value="M", limit=1000
 - Nunca uses este formato: {{"filters":{{"persona.nombre":{{"contains":"M"}}}}}}
+- Cuando la query pida "sin" algo (sin número, sin seguro, sin estado civil), SIEMPRE usa presets o not_exists. NUNCA interpretes estas palabras como nombres de paciente.
 """
 
 # Tools curadas que el planificador ve — evita saturar con las 26
@@ -299,6 +308,12 @@ def _extract_nombre(question: str) -> Optional[str]:
         "ayer", "hoy", "manana", "pasado", "anteayer", "pago", "pagos",
         "cobro", "cobros", "monto", "estadistica", "estadísticas", "resumen",
         "general", "total", "listado", "personas", "persona",
+        # Términos de filtro que NO son nombres de paciente
+        "numero", "numeros", "telefono", "telefonos", "celular", "cel",
+        "seguro", "seguros", "estado", "civil", "genero", "género",
+        "sin", "activo", "activos", "inactivo", "inactivos",
+        "todos", "todas", "tiene", "tienen",
+        "sangre", "tipo", "grupo", "direccion", "ocupacion",
     }
     candidates = [t for t in tokens if t not in stop_words and len(t) > 2]
     if len(candidates) >= 2:
@@ -324,6 +339,52 @@ def _is_patients_intent(q: str) -> bool:
 def _is_citas_intent(q: str) -> bool:
     t = _strip_accents_lc(q or "")
     return any(w in t for w in ["cita", "citas", "agenda", "agendada", "agendadas", "turno", "turnos", "consulta", "consultas"])
+
+def _apply_preset_overrides(question: str, tool_name: str, args: dict) -> tuple:
+    """Red de seguridad: detecta patrones 'sin/con X' y fuerza presets correctos
+    cuando el LLM no los generó bien. Retorna (tool_name, args) posiblemente modificados."""
+    if not _is_patients_intent(question):
+        return tool_name, args
+
+    q = _strip_accents_lc(question)
+
+    # Ya tiene preset bien formado → no intervenir
+    if isinstance(args.get("preset"), dict) and args["preset"]:
+        return tool_name, args
+
+    # Patrones: "sin número", "sin telefono", "sin cel", "sin numero de telefono"
+    has_sin_numero = bool(re.search(
+        r"\bsin\s+(?:numero|telefono|telefonos|celular|cel|numero\s+de\s+telefono|nro|num)",
+        q,
+    ))
+    has_con_numero = bool(re.search(
+        r"\bcon\s+(?:numero|telefono|telefonos|celular|cel|numero\s+de\s+telefono|nro|num)",
+        q,
+    ))
+    has_sin_seguro = bool(re.search(r"\bsin\s+(?:seguro|num_seguro|numero\s+de\s+seguro)", q))
+    has_con_seguro = bool(re.search(r"\bcon\s+(?:seguro|num_seguro|numero\s+de\s+seguro)", q))
+    has_sin_estado_civil = bool(re.search(r"\bsin\s+estado\s*civil", q))
+
+    if has_sin_numero:
+        _log("[OVERRIDE] sin número → preset tiene_telefono=false")
+        return "patient_filter", {"preset": {"tiene_telefono": False}, "limit": args.get("limit", 1000)}
+    if has_con_numero:
+        _log("[OVERRIDE] con número → preset tiene_telefono=true")
+        return "patient_filter", {"preset": {"tiene_telefono": True}, "limit": args.get("limit", 1000)}
+    if has_sin_seguro:
+        _log("[OVERRIDE] sin seguro → preset tiene_seguro=false")
+        return "patient_filter", {"preset": {"tiene_seguro": False}, "limit": args.get("limit", 1000)}
+    if has_con_seguro:
+        _log("[OVERRIDE] con seguro → preset tiene_seguro=true")
+        return "patient_filter", {"preset": {"tiene_seguro": True}, "limit": args.get("limit", 1000)}
+    if has_sin_estado_civil:
+        _log("[OVERRIDE] sin estado civil → not_exists")
+        return "patient_filter", {
+            "filters": [{"field": "persona.estado_civil", "op": "not_exists"}],
+            "limit": args.get("limit", 1000),
+        }
+
+    return tool_name, args
 
 def _birthdate_cutoff_for_age(years: int) -> str:
     from datetime import datetime, timedelta
@@ -640,6 +701,9 @@ class MedicalAgentMCP:
                 "limit": 10,
             }
             _log(f"[ROUTE] birthdate patient lookup name='{birthdate_name}'")
+
+        # ── Paso 1a: override de presets (red de seguridad) ──
+        tool_name, args = _apply_preset_overrides(question, tool_name or "", args)
 
         _log(f"[PLAN] tool={tool_name} args={args}")
 
