@@ -206,135 +206,127 @@ def _strip_accents_lc(text: str) -> str:
     )
 
 def _clean_patient_name_fragment(fragment: str) -> str:
-    name = re.sub(r"\b(?:el|la|paciente|senor|señor|senora|señora|sr|sra)\b", " ", fragment, flags=re.IGNORECASE)
+    name = re.sub(
+        r"\b(?:el|la|paciente|senor|señor|senora|señora|sr|sra)\b",
+        " ",
+        fragment,
+        flags=re.IGNORECASE,
+    )
     name = re.sub(r"[^\w\sáéíóúÁÉÍÓÚñÑüÜ]", " ", name)
     return " ".join(name.split())
 
 def _extract_birthdate_patient_query(question: str) -> Optional[str]:
     """Extrae nombre cuando la pregunta pide cumpleaños/nacimiento de un paciente."""
     normalized = _strip_accents_lc(question)
-    if not any(term in normalized for term in ("cumpleanos", "nacimiento", "nacio", "fecha de nacimiento")):
+
+    if not any(
+        term in normalized
+        for term in (
+            "cumpleanos",
+            "nacimiento",
+            "nacio",
+            "fecha de nacimiento",
+        )
+    ):
         return None
 
     patterns = [
         r"\b(?:cumpleanos|nacimiento|fecha de nacimiento)\s+(?:de|del|de la|para)\s+(.+)$",
         r"\bcuando\s+nacio\s+(.+)$",
     ]
+
     for pattern in patterns:
         m = re.search(pattern, normalized)
+
         if not m:
             continue
-        name = _clean_patient_name_fragment(question[m.start(1):m.end(1)])
+
+        name = _clean_patient_name_fragment(
+            question[m.start(1):m.end(1)]
+        )
+
         if len(name) >= 3:
             return name
+
     return None
 
 def _extract_json(text: str) -> Optional[dict]:
-    """Extrae el primer JSON válido del texto — tolerante a respuestas imperfectas del LLM."""
-    # bloque ```json ... ```
-    m = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", text, re.DOTALL)
+    """Extrae el primer JSON válido del texto."""
+    m = re.search(
+        r"```(?:json)?\s*(\{.*?\})\s*```",
+        text,
+        re.DOTALL,
+    )
+
     if m:
         try:
             return json.loads(m.group(1))
         except Exception:
             pass
-    # { ... } directo
+
     m = re.search(r"\{.*\}", text, re.DOTALL)
+
     if m:
         try:
             return json.loads(m.group())
         except Exception:
             pass
+
     return None
 
-# Extractores adicionales (copiados desde la versión raíz)
+# =========================================================
+# Extractores
+# =========================================================
 def _extract_sexo(question: str) -> Optional[str]:
     t = _strip_accents_lc(question or "")
-    if re.search(r"\b(femenino|femeninos|femenina|femeninas|mujer|mujeres)\b", t):
+
+    if re.search(
+        r"\b(femenino|femeninos|femenina|femeninas|mujer|mujeres)\b",
+        t,
+    ):
         return "femenino"
-    if re.search(r"\b(masculino|masculinos|hombre|hombres|varon|varones)\b", t):
+
+    if re.search(
+        r"\b(masculino|masculinos|hombre|hombres|varon|varones)\b",
+        t,
+    ):
         return "masculino"
+
     return None
 
 def _extract_ci_like(question: str) -> Optional[str]:
     q = question or ""
-    m = re.search(r"\b(ci|carnet|dni|documento)\b[^0-9]{0,10}(\d{3,12})\b", q, flags=re.IGNORECASE)
+
+    m = re.search(
+        r"\b(ci|carnet|dni|documento)\b[^0-9]{0,10}(\d{3,12})\b",
+        q,
+        flags=re.IGNORECASE,
+    )
+
     return m.group(2) if m else None
 
 def _extract_blood_type(question: str) -> Optional[str]:
     qlc = _strip_accents_lc(question or "")
-    m = re.search(r"(?i)\b(AB|A|B|O)\s*([+-])(?=$|\s|[.,;:!?])", question or "")
+
+    m = re.search(
+        r"(?i)\b(AB|A|B|O)\s*([+-])(?=$|\s|[.,;:!?])",
+        question or "",
+    )
+
     if m:
         return f"{m.group(1).upper()}{m.group(2)}"
-    m2 = re.search(r"\b(ab|a|b|o)\s*(positivo|negativo)\b", qlc)
+
+    m2 = re.search(
+        r"\b(ab|a|b|o)\s*(positivo|negativo)\b",
+        qlc,
+    )
+
     if m2:
         grp = m2.group(1).upper()
         sign = "+" if m2.group(2) == "positivo" else "-"
         return f"{grp}{sign}"
-    return None
-
-def _extract_estado_civil(question: str) -> Optional[str]:
-    q = _strip_accents_lc(question or "")
-
-    mapping = {
-        "soltero": "Soltero",
-        "soltera": "Soltero",
-        "casado": "Casado",
-        "casada": "Casado",
-        "divorciado": "Divorciado",
-        "divorciada": "Divorciado",
-        "viudo": "Viudo",
-        "viuda": "Viudo",
-        "union libre": "Unión libre",
-        "concubino": "Unión libre",
-        "concubina": "Unión libre",
-    }
-
-    for k, v in mapping.items():
-        if k in q:
-            return v
 
     return None
-
-def _extract_seguro_number(question: str) -> Optional[str]:
-    q = question or ""
-
-    patterns = [
-        r"(?:seguro|poliza|póliza|nro seguro|numero seguro)[^\d]{0,10}([A-Z0-9\-]{4,30})",
-        r"\b([A-Z]{2,5}-\d{3,20})\b",
-    ]
-
-    for p in patterns:
-        m = re.search(p, q, flags=re.IGNORECASE)
-        if m:
-            return m.group(1).strip()
-
-    return None
-
-def _asks_no_seguro(question: str) -> bool:
-    q = _strip_accents_lc(question or "")
-    patterns = [
-        "sin seguro",
-        "no tienen seguro",
-        "no tiene seguro",
-        "sin seguro medico",
-    ]
-    return any(p in q for p in patterns)
-
-def _asks_no_estado_civil(question: str) -> bool:
-    q = _strip_accents_lc(question or "")
-    patterns = [
-        "sin estado civil",
-        "no tienen estado civil",
-        "sin registrar estado civil",
-    ]
-    return any(p in q for p in patterns)
-
-def _extract_phone(question: str) -> Optional[str]:
-    q = question or ""
-    m = re.search(r"\b(\+?\d{7,15})\b", q)
-    return m.group(1) if m else None
-
 
 _NAME_TRIGGER_RE = re.compile(
     r"\b(?:llamad[ao]s?|ll[aá]mase|se llama[n]?|de nombre|con nombre|apellidad[ao]s?|apellido)\s+"
@@ -343,138 +335,292 @@ _NAME_TRIGGER_RE = re.compile(
 )
 
 def _extract_nombre(question: str) -> Optional[str]:
-    """Extrae un nombre propio de la pregunta con disparador o heurística simple."""
     m = _NAME_TRIGGER_RE.search(question or "")
+
     if m:
         return m.group(1).strip()
 
     q = _strip_accents_lc(question or "")
+
     tokens = re.findall(r"[a-záéíóúüñ]+", q)
+
     stop_words = {
-        "paciente", "pacientes", "cita", "citas", "visita", "visitas",
-        "lista", "listame", "listado", "dame", "mostrar", "muéstrame", "muestrame",
-        "ver", "traeme", "tráeme", "buscar", "busca", "busco", "encontrar",
-        "cuantos", "cuántos", "total", "hay", "el", "la", "los", "las",
-        "de", "del", "con", "para", "que", "como", "quien", "quién",
-        "un", "una", "unos", "unas", "en", "al", "se", "datos", "informacion",
-        "información", "nombre", "apellido", "llamado", "llama", "apellidos",
-        "historial", "atencion", "atención", "agenda", "turno", "consulta",
-        "ayer", "hoy", "manana", "pasado", "anteayer", "pago", "pagos",
-        "cobro", "cobros", "monto", "estadistica", "estadísticas", "resumen",
-        "general", "total", "listado", "personas", "persona",
+        "paciente", "pacientes", "cita", "citas",
+        "visita", "visitas", "lista", "listame",
+        "listado", "dame", "mostrar", "muestrame",
+        "ver", "buscar", "busca", "encontrar",
+        "cuantos", "hay", "el", "la", "los",
+        "las", "de", "del", "con", "para",
+        "que", "como", "quien", "un", "una",
+        "nombre", "apellido", "apellidos",
     }
-    candidates = [t for t in tokens if t not in stop_words and len(t) > 2]
+
+    candidates = [
+        t for t in tokens
+        if t not in stop_words and len(t) > 2
+    ]
+
     if len(candidates) >= 2:
         return " ".join(candidates[:2])
+
     if len(candidates) == 1:
         return candidates[0]
+
     return None
 
 def _extract_age_comparator(question: str) -> Optional[Tuple[str, int]]:
     q = _strip_accents_lc(question or "")
-    m = re.search(r"\b(?:mayor(?:es)?|mas)\s*(?:a|de|que)?\s*(\d{1,3})\s*(?:anos|ano|anios|edad)?\b", q)
+
+    m = re.search(
+        r"\b(?:mayor(?:es)?|mas)\s*(?:a|de|que)?\s*(\d{1,3})\s*(?:anos|ano|anios|edad)?\b",
+        q,
+    )
+
     if m:
         return (">", int(m.group(1)))
-    m2 = re.search(r"\b(?:menor(?:es)?|menos)\s*(?:a|de|que)?\s*(\d{1,3})\s*(?:anos|ano|anios|edad)?\b", q)
+
+    m2 = re.search(
+        r"\b(?:menor(?:es)?|menos)\s*(?:a|de|que)?\s*(\d{1,3})\s*(?:anos|ano|anios|edad)?\b",
+        q,
+    )
+
     if m2:
         return ("<", int(m2.group(1)))
+
     return None
 
 def _is_patients_intent(q: str) -> bool:
     t = _strip_accents_lc(q or "")
-    return any(w in t for w in ["paciente", "pacientes", "tabla de paciente", "tablas de paciente", "usuario", "usuarios"])
+
+    return any(
+        w in t
+        for w in (
+            "paciente",
+            "pacientes",
+            "usuario",
+            "usuarios",
+        )
+    )
 
 def _is_citas_intent(q: str) -> bool:
     t = _strip_accents_lc(q or "")
-    return any(w in t for w in ["cita", "citas", "agenda", "agendada", "agendadas", "turno", "turnos", "consulta", "consultas"])
+
+    return any(
+        w in t
+        for w in (
+            "cita",
+            "citas",
+            "agenda",
+            "turno",
+            "consulta",
+        )
+    )
 
 def _birthdate_cutoff_for_age(years: int) -> str:
-    from datetime import datetime, timedelta
+    from datetime import datetime
+
     try:
-        base = datetime.now(ZoneInfo("America/La_Paz")).date()
+        base = datetime.now(
+            ZoneInfo("America/La_Paz")
+        ).date()
     except Exception:
         base = datetime.now().date()
+
     try:
-        cutoff = base.replace(year=base.year - years)
+        cutoff = base.replace(
+            year=base.year - years
+        )
     except Exception:
-        cutoff = base.replace(year=base.year - years, day=28)
+        cutoff = base.replace(
+            year=base.year - years,
+            day=28,
+        )
+
     return cutoff.strftime("%Y-%m-%d")
 
 def _flatten_patient_row(row: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Aplana un paciente y agrega fallbacks inteligentes
+    para seguro, estado civil y teléfonos.
+    """
+
     persona = row.get("persona") or {}
 
-    nombre = " ".join(filter(None, [
-        persona.get("nombre"),
-        persona.get("apellidos")
-    ])) or None
+    nombre = " ".join(
+        filter(
+            None,
+            [
+                persona.get("nombre"),
+                persona.get("apellidos"),
+            ],
+        )
+    ) or None
+
+    telefono = (
+        persona.get("telf1")
+        or persona.get("telf2")
+        or persona.get("tel_referencia")
+        or None
+    )
+
+    seguro_num = (
+        persona.get("num_seguro")
+        or row.get("num_seguro")
+        or None
+    )
+
+    empresa_seg = (
+        persona.get("empresa_seg")
+        or row.get("empresa_seg")
+        or None
+    )
+
+    estado_civil = (
+        persona.get("estado_civil")
+        or row.get("estado_civil")
+        or None
+    )
+
+    tiene_seguro = bool(
+        seguro_num or empresa_seg
+    )
+
+    tiene_telefono = bool(telefono)
 
     return {
         "id": row.get("id") or row.get("patient_id"),
-        "nombre": nombre,
-        "ci": persona.get("ci"),
-        "sexo": persona.get("sexo") or "Sin género",
 
-        "telefono_1": persona.get("telf1"),
-        "telefono_2": persona.get("telf2"),
-        "telefono_referencia": persona.get("tel_referencia"),
+        "nombre": nombre,
+
+        "ci": persona.get("ci"),
+
+        "sexo": (
+            persona.get("sexo")
+            or "Sin género"
+        ),
+
+        "telefono": telefono,
 
         "fecha_nacimiento": (
             persona.get("fecha_nacimiento") or ""
         )[:10] or None,
 
-        "estado_civil": persona.get("estado_civil"),
-
-        "num_seguro": persona.get("num_seguro"),
-        "empresa_seguro": persona.get("empresa_seg"),
-
         "estado": row.get("estado"),
+
+        # ======================================
+        # NUEVOS CAMPOS
+        # ======================================
+        "num_seguro": seguro_num,
+        "empresa_seg": empresa_seg,
+        "estado_civil": estado_civil,
+
+        "tiene_seguro": tiene_seguro,
+        "tiene_telefono": tiene_telefono,
     }
 
-def _rows_to_excel_b64(rows: List[Dict[str, Any]], sheet_name: str = "Resultados") -> Optional[str]:
+def _rows_to_excel_b64(
+    rows: List[Dict[str, Any]],
+    sheet_name: str = "Resultados",
+) -> Optional[str]:
+
     if not rows:
         return None
+
     try:
         buf = io.BytesIO()
-        pd.DataFrame(rows).to_excel(buf, index=False, sheet_name=sheet_name, engine="openpyxl")
-        return base64.b64encode(buf.getvalue()).decode("utf-8")
+
+        pd.DataFrame(rows).to_excel(
+            buf,
+            index=False,
+            sheet_name=sheet_name,
+            engine="openpyxl",
+        )
+
+        return base64.b64encode(
+            buf.getvalue()
+        ).decode("utf-8")
+
     except Exception:
         return None
 
 def _unwrap_rows(payload: Any) -> List[Dict[str, Any]]:
-    """Extrae lista de rows de cualquier estructura que devuelva el MCP."""
+    """Extrae rows de cualquier estructura MCP."""
+
     if isinstance(payload, list):
         return payload
+
     if isinstance(payload, dict):
-        for k in ("items", "rows", "data", "results"):
+        for k in (
+            "items",
+            "rows",
+            "data",
+            "results",
+        ):
             v = payload.get(k)
+
             if isinstance(v, list):
                 return v
+
     return []
 
-def _normalize_tool_args(args: Any, question: str = "") -> Dict[str, Any]:
-    """Corrige formatos comunes que devuelve el planner antes de llamar al MCP."""
+def _normalize_tool_args(
+    args: Any,
+    question: str = "",
+) -> Dict[str, Any]:
+
     if not isinstance(args, dict):
         return {}
 
     normalized = dict(args)
 
     filters = normalized.get("filters")
+
     if isinstance(filters, dict):
-        if all(k in filters for k in ("field", "op", "value")):
+
+        if all(
+            k in filters
+            for k in ("field", "op", "value")
+        ):
             normalized["filters"] = [filters]
+
         else:
             converted_filters = []
-            for field, op_map in filters.items():
-                if isinstance(op_map, dict):
-                    for op, value in op_map.items():
-                        converted_filters.append({"field": field, "op": op, "value": value})
-                else:
-                    converted_filters.append({"field": field, "op": "eq", "value": op_map})
-            normalized["filters"] = converted_filters
-    elif filters is None and isinstance(normalized.get("filter"), dict):
-        normalized["filters"] = [normalized.pop("filter")]
 
-    if "filters" not in normalized and all(k in normalized for k in ("field", "op", "value")):
+            for field, op_map in filters.items():
+
+                if isinstance(op_map, dict):
+
+                    for op, value in op_map.items():
+                        converted_filters.append({
+                            "field": field,
+                            "op": op,
+                            "value": value,
+                        })
+
+                else:
+                    converted_filters.append({
+                        "field": field,
+                        "op": "eq",
+                        "value": op_map,
+                    })
+
+            normalized["filters"] = converted_filters
+
+    elif filters is None and isinstance(
+        normalized.get("filter"),
+        dict,
+    ):
+        normalized["filters"] = [
+            normalized.pop("filter")
+        ]
+
+    if (
+        "filters" not in normalized
+        and all(
+            k in normalized
+            for k in ("field", "op", "value")
+        )
+    ):
         normalized["filters"] = [{
             "field": normalized.pop("field"),
             "op": normalized.pop("op"),
@@ -489,34 +635,78 @@ def _normalize_tool_args(args: Any, question: str = "") -> Dict[str, Any]:
         "ends_with": "endsWith",
         "ends-with": "endsWith",
     }
+
     for f in normalized.get("filters", []) or []:
+
         if isinstance(f, dict) and isinstance(f.get("op"), str):
+
             key = f["op"].strip()
-            f["op"] = op_aliases.get(key.lower(), key)
+
+            f["op"] = op_aliases.get(
+                key.lower(),
+                key,
+            )
+
             q = question.lower()
-            asks_prefix = any(word in q for word in ("empiec", "comien", "inici", "arranc"))
-            if asks_prefix and f["op"] == "contains" and f.get("field") in ("persona.nombre", "persona.apellidos", "nombre", "apellidos"):
+
+            asks_prefix = any(
+                word in q
+                for word in (
+                    "empiec",
+                    "comien",
+                    "inici",
+                    "arranc",
+                )
+            )
+
+            if (
+                asks_prefix
+                and f["op"] == "contains"
+                and f.get("field") in (
+                    "persona.nombre",
+                    "persona.apellidos",
+                    "nombre",
+                    "apellidos",
+                )
+            ):
                 f["op"] = "startsWith"
 
     return normalized
 
-def _diagnose_node_sync(cmd: List[str], env: dict, cwd: Optional[str], seconds: int = 5):
+def _diagnose_node_sync(
+    cmd: List[str],
+    env: dict,
+    cwd: Optional[str],
+    seconds: int = 5,
+):
     _log("---- DIAG: spawning node process ----")
+
     try:
         proc = subprocess.Popen(
-            cmd, cwd=cwd, env=env,
+            cmd,
+            cwd=cwd,
+            env=env,
             stdin=subprocess.DEVNULL,
-            stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-            text=True, encoding="utf-8", errors="replace",
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
         )
+
         try:
             proc.wait(timeout=seconds)
+
         except subprocess.TimeoutExpired:
             proc.terminate()
+
         _, err = proc.communicate(timeout=2)
+
         if (err or "").strip():
             _log(f"DIAG STDERR: {err[:2000]}")
+
         _log(f"DIAG returncode={proc.returncode}")
+
     except Exception as e:
         _log(f"DIAG failed: {repr(e)}")
 
@@ -524,128 +714,283 @@ def _diagnose_node_sync(cmd: List[str], env: dict, cwd: Optional[str], seconds: 
 # MCP Proxy
 # =========================================================
 class NodeMCPToolsProxy:
+
     def __init__(self, session: ClientSession):
         self.session = session
         self.allowed_tools: Set[str] = set()
         self.tools_meta: List[Dict] = []
 
     async def refresh_allowed_tools(self) -> None:
+
         try:
             with anyio.fail_after(MCP_TOOL_TIMEOUT):
                 resp = await self.session.list_tools()
+
             raw = getattr(resp, "tools", None) or resp
+
             if isinstance(raw, list):
+
                 for t in raw:
-                    name = getattr(t, "name", None) or (t.get("name") if isinstance(t, dict) else None)
-                    desc = getattr(t, "description", "") or (t.get("description", "") if isinstance(t, dict) else "")
+
+                    name = (
+                        getattr(t, "name", None)
+                        or (
+                            t.get("name")
+                            if isinstance(t, dict)
+                            else None
+                        )
+                    )
+
+                    desc = (
+                        getattr(t, "description", "")
+                        or (
+                            t.get("description", "")
+                            if isinstance(t, dict)
+                            else ""
+                        )
+                    )
+
                     if name:
                         self.allowed_tools.add(str(name))
-                        self.tools_meta.append({"name": str(name), "description": str(desc)})
-            _log(f"[TOOLS] loaded {len(self.allowed_tools)} tools")
+
+                        self.tools_meta.append({
+                            "name": str(name),
+                            "description": str(desc),
+                        })
+
+            _log(
+                f"[TOOLS] loaded "
+                f"{len(self.allowed_tools)} tools"
+            )
+
         except Exception as e:
-            _log(f"[TOOLS] list_tools failed: {repr(e)}")
+
+            _log(
+                f"[TOOLS] list_tools failed: "
+                f"{repr(e)}"
+            )
+
             self.allowed_tools = {
-                "patient_list", "patient_get", "patient_filter",
-                "citas_list", "citas_filter", "citas_by_patient",
-                "visitas_by_patient", "visitas_by_cita",
-                "antecedents_get", "antecedents_filter",
-                "payments_list", "payments_statistics",
-                "estudios_by_patient", "dashboard_stats",
+                "patient_list",
+                "patient_get",
+                "patient_filter",
+                "citas_list",
+                "citas_filter",
+                "citas_by_patient",
+                "visitas_by_patient",
+                "visitas_by_cita",
+                "antecedents_get",
+                "antecedents_filter",
+                "payments_list",
+                "payments_statistics",
+                "estudios_by_patient",
+                "dashboard_stats",
                 "clinic_bundle",
             }
 
     def tools_description(self) -> str:
+
         if self.tools_meta:
+
             return "\n".join(
                 f"{t['name']}: {t['description']}"
                 for t in self.tools_meta
-                if t['name'] in _PLANNER_TOOLS
+                if t["name"] in _PLANNER_TOOLS
             )
-        return "\n".join(f"{t}" for t in sorted(self.allowed_tools & _PLANNER_TOOLS))
 
-    async def call(self, name: str, args: Optional[dict] = None) -> Any:
-        if self.allowed_tools and name not in self.allowed_tools:
-            raise RuntimeError(f"Tool '{name}' no existe en MCP.")
-        _log(f"[TOOL] call {name} args={args or {}}")
+        return "\n".join(
+            f"{t}"
+            for t in sorted(
+                self.allowed_tools & _PLANNER_TOOLS
+            )
+        )
+
+    async def call(
+        self,
+        name: str,
+        args: Optional[dict] = None,
+    ) -> Any:
+
+        if (
+            self.allowed_tools
+            and name not in self.allowed_tools
+        ):
+            raise RuntimeError(
+                f"Tool '{name}' no existe en MCP."
+            )
+
+        _log(
+            f"[TOOL] call {name} "
+            f"args={args or {}}"
+        )
+
         with anyio.fail_after(MCP_TOOL_TIMEOUT):
-            res = await self.session.call_tool(name, args or {})
+            res = await self.session.call_tool(
+                name,
+                args or {},
+            )
 
         content = getattr(res, "content", None) or res
+
         payload = None
+
         if isinstance(content, list) and content:
+
             txt = getattr(content[0], "text", None)
+
             if txt:
                 try:
                     payload = json.loads(txt)
-                except Exception:
-                    payload = {"_raw": txt[:2000]}
 
-        if isinstance(payload, dict) and "ok" in payload:
+                except Exception:
+                    payload = {
+                        "_raw": txt[:2000]
+                    }
+
+        if (
+            isinstance(payload, dict)
+            and "ok" in payload
+        ):
+
             if payload.get("ok") is True:
                 return payload.get("data")
-            raise RuntimeError(payload.get("error") or "MCP tool error")
 
-        return payload if payload is not None else content
+            raise RuntimeError(
+                payload.get("error")
+                or "MCP tool error"
+            )
+
+        return (
+            payload
+            if payload is not None
+            else content
+        )
 
 # =========================================================
 # Agent
 # =========================================================
 class MedicalAgentMCP:
+
     def __init__(
         self,
         tools: NodeMCPToolsProxy,
-        thinker_client, thinker_model: str,
-        answerer_client,   answerer_model: str,
+        thinker_client,
+        thinker_model: str,
+        answerer_client,
+        answerer_model: str,
     ):
-        self.tools          = tools
-        self.thinker        = thinker_client
-        self.thinker_model  = thinker_model
-        self.answerer          = answerer_client
-        self.answerer_model    = answerer_model
+        self.tools = tools
 
-    def _call_llm(self, client, model: str, system: str, user: str,
-                  temperature: float = 0, json_mode: bool = False) -> str:
+        self.thinker = thinker_client
+        self.thinker_model = thinker_model
+
+        self.answerer = answerer_client
+        self.answerer_model = answerer_model
+
+    def _call_llm(
+        self,
+        client,
+        model: str,
+        system: str,
+        user: str,
+        temperature: float = 0,
+        json_mode: bool = False,
+    ) -> str:
+
         kwargs: Dict[str, Any] = dict(
             model=model,
             messages=[
-                {"role": "system", "content": system},
-                {"role": "user", "content": user},
+                {
+                    "role": "system",
+                    "content": system,
+                },
+                {
+                    "role": "user",
+                    "content": user,
+                },
             ],
             temperature=temperature,
             timeout=LLM_TIMEOUT,
         )
-        if json_mode:
-            kwargs["response_format"] = {"type": "json_object"}
-        resp = client.chat.completions.create(**kwargs)
-        return resp.choices[0].message.content or ""
 
-    def _plan(self, question: str) -> Dict[str, Any]:
-        """Thinker: decide qué tool llamar y con qué args (devuelve JSON)."""
+        if json_mode:
+            kwargs["response_format"] = {
+                "type": "json_object"
+            }
+
+        resp = client.chat.completions.create(
+            **kwargs
+        )
+
+        return (
+            resp.choices[0].message.content
+            or ""
+        )
+
+    def _plan(
+        self,
+        question: str,
+    ) -> Dict[str, Any]:
+
         today = _local_today()
+
         system = PLANNER_SYSTEM.format(
             tools_desc=self.tools.tools_description(),
             today=today,
         )
-        raw = self._call_llm(self.thinker, self.thinker_model,
-                             system, question, temperature=0, json_mode=True)
+
+        raw = self._call_llm(
+            self.thinker,
+            self.thinker_model,
+            system,
+            question,
+            temperature=0,
+            json_mode=True,
+        )
+
         _log(f"[THINKER] response: {raw[:300]}")
+
         plan = _extract_json(raw)
+
         if not plan:
             _log("[THINKER] failed to parse JSON")
-            return {"tool": None, "args": {}}
+
+            return {
+                "tool": None,
+                "args": {},
+            }
+
         return plan
 
-    def _analyze(self, question: str, rows: List[Dict], extra_context: str = "") -> str:
-        """Asker: analiza los datos y genera respuesta en lenguaje natural."""
-        if extra_context:
-            user_msg = f"Q: {question}\nDatos: {extra_context}"
-        else:
-            total = len(rows)
-            if total <= MAX_ROWS_TO_LLM:
-                safe_wrapper_start = "=== DATOS_JSON_SEGUROS ==="
-                safe_wrapper_end = "=== FIN_DATOS_JSON ==="
+    def _analyze(
+        self,
+        question: str,
+        rows: List[Dict],
+        extra_context: str = "",
+    ) -> str:
 
-                data_str = json.dumps(rows, ensure_ascii=False, default=str, separators=(',', ':'))
+        if extra_context:
+
+            user_msg = (
+                f"Q: {question}\n"
+                f"Datos: {extra_context}"
+            )
+
+        else:
+
+            total = len(rows)
+
+            safe_wrapper_start = "=== DATOS_JSON_SEGUROS ==="
+            safe_wrapper_end = "=== FIN_DATOS_JSON ==="
+
+            if total <= MAX_ROWS_TO_LLM:
+
+                data_str = json.dumps(
+                    rows,
+                    ensure_ascii=False,
+                    default=str,
+                    separators=(",", ":"),
+                )
 
                 user_msg = (
                     f"Q: {question}\n"
@@ -653,164 +998,300 @@ class MedicalAgentMCP:
                     f"{safe_wrapper_start}\n"
                     f"{data_str}\n"
                     f"{safe_wrapper_end}"
-                )                
-            else:
-                sample = rows[:MAX_ROWS_TO_LLM]
-                safe_wrapper_start = "=== DATOS_JSON_SEGUROS ==="
-                safe_wrapper_end = "=== FIN_DATOS_JSON ==="
+                )
 
-                data_str = json.dumps(sample, ensure_ascii=False, default=str, separators=(',', ':'))
+            else:
+
+                sample = rows[:MAX_ROWS_TO_LLM]
+
+                data_str = json.dumps(
+                    sample,
+                    ensure_ascii=False,
+                    default=str,
+                    separators=(",", ":"),
+                )
 
                 user_msg = (
                     f"Q: {question}\n"
-                    f"Total:{total} (muestra de {MAX_ROWS_TO_LLM})\n"
+                    f"Total:{total} "
+                    f"(muestra de {MAX_ROWS_TO_LLM})\n"
                     f"{safe_wrapper_start}\n"
                     f"{data_str}\n"
                     f"{safe_wrapper_end}"
                 )
-        return self._call_llm(self.answerer, self.answerer_model,
-                              ANALYZER_SYSTEM, user_msg, temperature=0)
 
-    async def _resolve_patient_id(self, name: str) -> Optional[str]:
-        """Busca un paciente por nombre/apellido y devuelve su ID numérico."""
-        _log(f"[RESOLVE] buscando patient_id para nombre='{name}'")
+        return self._call_llm(
+            self.answerer,
+            self.answerer_model,
+            ANALYZER_SYSTEM,
+            user_msg,
+            temperature=0,
+        )
+
+    async def _resolve_patient_id(
+        self,
+        name: str,
+    ) -> Optional[str]:
+
+        _log(
+            f"[RESOLVE] buscando patient_id "
+            f"para nombre='{name}'"
+        )
+
         parts = name.strip().split()
 
-        # Intentar con cada parte del nombre (nombre o apellido)
         for part in parts:
+
             if len(part) < 3:
                 continue
-            for field in ("persona.nombre", "persona.apellidos"):
-                raw = await self.tools.call("patient_filter", {
-                    "filters": [{"field": field, "op": "contains", "value": part}],
-                    "limit": 10,
-                })
+
+            for field in (
+                "persona.nombre",
+                "persona.apellidos",
+            ):
+
+                raw = await self.tools.call(
+                    "patient_filter",
+                    {
+                        "filters": [{
+                            "field": field,
+                            "op": "contains",
+                            "value": part,
+                        }],
+                        "limit": 10,
+                    },
+                )
+
                 rows = _unwrap_rows(raw)
+
                 if rows:
-                    # si hay varios, intentar afinar con otra parte del nombre
-                    if len(rows) > 1 and len(parts) > 1:
-                        other_parts = [p for p in parts if p != part and len(p) >= 3]
+
+                    if (
+                        len(rows) > 1
+                        and len(parts) > 1
+                    ):
+
+                        other_parts = [
+                            p
+                            for p in parts
+                            if p != part and len(p) >= 3
+                        ]
+
                         for row in rows:
-                            persona = row.get("persona", {})
-                            full = f"{persona.get('nombre','')} {persona.get('apellidos','')}".lower()
-                            if any(p.lower() in full for p in other_parts):
-                                pid = row.get("id") or row.get("patient_id")
-                                _log(f"[RESOLVE] encontrado id={pid} ({full})")
-                                return str(pid) if pid is not None else None
-                    pid = rows[0].get("id") or rows[0].get("patient_id")
-                    _log(f"[RESOLVE] encontrado id={pid}")
-                    return str(pid) if pid is not None else None
+
+                            persona = (
+                                row.get("persona", {})
+                            )
+
+                            full = (
+                                f"{persona.get('nombre','')} "
+                                f"{persona.get('apellidos','')}"
+                            ).lower()
+
+                            if any(
+                                p.lower() in full
+                                for p in other_parts
+                            ):
+                                pid = (
+                                    row.get("id")
+                                    or row.get("patient_id")
+                                )
+
+                                _log(
+                                    f"[RESOLVE] "
+                                    f"encontrado id={pid} "
+                                    f"({full})"
+                                )
+
+                                return (
+                                    str(pid)
+                                    if pid is not None
+                                    else None
+                                )
+
+                    pid = (
+                        rows[0].get("id")
+                        or rows[0].get("patient_id")
+                    )
+
+                    _log(
+                        f"[RESOLVE] encontrado id={pid}"
+                    )
+
+                    return (
+                        str(pid)
+                        if pid is not None
+                        else None
+                    )
+
         return None
 
-    async def query(self, question: str) -> Dict[str, Any]:
-        # ── Paso 1: planificar ──────────────────────────────
-        plan = self._plan(question)
-        tool_name = plan.get("tool")
-        args = _normalize_tool_args(plan.get("args") or {}, question)
+    async def query(
+        self,
+        question: str,
+    ) -> Dict[str, Any]:
 
-        birthdate_name = _extract_birthdate_patient_query(question)
+        # =====================================================
+        # PASO 1 — PLANIFICAR
+        # =====================================================
+        plan = self._plan(question)
+
+        tool_name = plan.get("tool")
+
+        args = _normalize_tool_args(
+            plan.get("args") or {},
+            question,
+        )
+
+        birthdate_name = _extract_birthdate_patient_query(
+            question
+        )
+
         if birthdate_name:
+
             tool_name = "patient_filter"
+
             args = {
                 "search": {
                     "text": birthdate_name,
-                    "fields": ["persona.nombre", "persona.apellidos"],
+                    "fields": [
+                        "persona.nombre",
+                        "persona.apellidos",
+                    ],
                 },
                 "limit": 10,
             }
-            _log(f"[ROUTE] birthdate patient lookup name='{birthdate_name}'")
 
-        _log(f"[PLAN] tool={tool_name} args={args}")
+            _log(
+                f"[ROUTE] birthdate lookup "
+                f"name='{birthdate_name}'"
+            )
 
-        if _is_patients_intent(question):
+        _log(
+            f"[PLAN] tool={tool_name} "
+            f"args={args}"
+        )
 
-            filters = args.get("filters", [])
+        # =====================================================
+        # SIN TOOL
+        # =====================================================
+        if (
+            not tool_name
+            or tool_name not in self.tools.allowed_tools
+        ):
 
-            # ---------- Estado civil ----------
-            estado_civil = _extract_estado_civil(question)
-
-            if estado_civil:
-                tool_name = "patient_filter"
-
-                filters.append({
-                    "field": "persona.estado_civil",
-                    "op": "eq",
-                    "value": estado_civil,
-                })
-
-        if _asks_no_estado_civil(question):
-            tool_name = "patient_filter"
-
-            filters.append({
-                "field": "persona.estado_civil",
-                "op": "not_exists",
-            })
-        
-            seguro_num = _extract_seguro_number(question)
-
-        if seguro_num:
-            tool_name = "patient_filter"
-
-            filters.append({
-                "field": "persona.num_seguro",
-                "op": "contains",
-                "value": seguro_num,
-            })
-
-        if _asks_no_seguro(question):
-            tool_name = "patient_filter"
-
-            filters.append({
-                "field": "tiene_seguro",
-                "op": "eq",
-                "value": False,
-            })
-
-        args["filters"] = filters
-
-        # sin tool — LLM responde directo
-        if not tool_name or tool_name not in self.tools.allowed_tools:
             answer = self._call_llm(
                 self.answerer,
                 self.answerer_model,
                 ANALYZER_SYSTEM,
-                f"Pregunta: {question}\n\nNo hay datos disponibles del sistema para esta consulta.",
+                (
+                    f"Pregunta: {question}\n\n"
+                    f"No hay datos disponibles "
+                    f"del sistema para esta consulta."
+                ),
                 temperature=0.3,
             )
-            return {"answer": answer, "data": {"rows": [], "row_count": 0}, "steps": 1}
 
-        # ── Paso 1b: resolver nombre → patient_id si hace falta ────
-        # Si el tool necesita un patient_id pero el planificador puso un string no numérico
-        _ID_ARGS = {"patient_id", "patientId"}
+            return {
+                "answer": answer,
+                "data": {
+                    "rows": [],
+                    "row_count": 0,
+                },
+                "steps": 1,
+            }
+
+        # =====================================================
+        # RESOLVER patient_id
+        # =====================================================
+        _ID_ARGS = {
+            "patient_id",
+            "patientId",
+        }
+
         for id_field in _ID_ARGS:
+
             val = args.get(id_field)
+
             if val and not str(val).isdigit():
-                # es un nombre, no un ID — resolver
-                resolved = await self._resolve_patient_id(str(val))
+
+                resolved = await self._resolve_patient_id(
+                    str(val)
+                )
+
                 if resolved:
+
                     args[id_field] = resolved
-                    _log(f"[RESOLVE] {id_field} '{val}' → '{resolved}'")
+
+                    _log(
+                        f"[RESOLVE] "
+                        f"{id_field} '{val}' "
+                        f"→ '{resolved}'"
+                    )
+
                 else:
+
                     return {
-                        "answer": f"No encontré ningún paciente con el nombre '{val}'.",
-                        "data": {"rows": [], "row_count": 0},
+                        "answer": (
+                            f"No encontré ningún "
+                            f"paciente con el nombre "
+                            f"'{val}'."
+                        ),
+                        "data": {
+                            "rows": [],
+                            "row_count": 0,
+                        },
                         "steps": 2,
                     }
 
-        # Si es citas_filter con patient_id como nombre en filters, resolver también
-        if tool_name in ("citas_filter", "citas_by_patient", "visitas_by_patient",
-                         "estudios_by_patient", "pagos_by_patient", "payments_by_patient"):
-            for f in args.get("filters", []):
-                if f.get("field") == "patient_id" and not str(f.get("value", "")).isdigit():
-                    resolved = await self._resolve_patient_id(str(f["value"]))
-                    if resolved:
-                        f["value"] = resolved
-                        _log(f"[RESOLVE] filter patient_id '{f['value']}' → '{resolved}'")
+        # =====================================================
+        # RESOLVER patient_id EN FILTERS
+        # =====================================================
+        if tool_name in (
+            "citas_filter",
+            "citas_by_patient",
+            "visitas_by_patient",
+            "estudios_by_patient",
+            "payments_by_patient",
+        ):
 
-        # ── Paso 2: ejecutar tool ───────────────────────────
+            for f in args.get("filters", []):
+
+                if (
+                    f.get("field") == "patient_id"
+                    and not str(
+                        f.get("value", "")
+                    ).isdigit()
+                ):
+
+                    original = str(f["value"])
+
+                    resolved = await self._resolve_patient_id(
+                        original
+                    )
+
+                    if resolved:
+
+                        f["value"] = resolved
+
+                        _log(
+                            f"[RESOLVE] filter "
+                            f"patient_id '{original}' "
+                            f"→ '{resolved}'"
+                        )
+
+        # =====================================================
+        # PASO 2 — EJECUTAR TOOL
+        # =====================================================
         try:
-            raw = await self.tools.call(tool_name, args)
+
+            raw = await self.tools.call(
+                tool_name,
+                args,
+            )
+
         except Exception as e:
+
             _log(f"[TOOL ERROR] {repr(e)}")
 
             retry_prompt = f"""
@@ -849,79 +1330,251 @@ Devuelve SOLO JSON válido:
             retry_plan = _extract_json(retry_raw)
 
             if retry_plan:
-                retry_tool = retry_plan.get("tool") or tool_name
+
+                retry_tool = (
+                    retry_plan.get("tool")
+                    or tool_name
+                )
+
                 retry_args = _normalize_tool_args(
                     retry_plan.get("args") or {},
                     question,
                 )
 
-                _log(f"[RETRY PLAN] tool={retry_tool} args={retry_args}")
+                _log(
+                    f"[RETRY PLAN] "
+                    f"tool={retry_tool} "
+                    f"args={retry_args}"
+                )
 
                 try:
-                    raw = await self.tools.call(retry_tool, retry_args)
+
+                    raw = await self.tools.call(
+                        retry_tool,
+                        retry_args,
+                    )
 
                     tool_name = retry_tool
                     args = retry_args
 
                 except Exception as retry_error:
-                    _log(f"[RETRY ERROR] {repr(retry_error)}")
+
+                    _log(
+                        f"[RETRY ERROR] "
+                        f"{repr(retry_error)}"
+                    )
 
                     return {
-                        "answer": f"Error al consultar el sistema: {retry_error}",
-                        "data": {"rows": [], "row_count": 0},
+                        "answer": (
+                            f"Error al consultar "
+                            f"el sistema: "
+                            f"{retry_error}"
+                        ),
+                        "data": {
+                            "rows": [],
+                            "row_count": 0,
+                        },
                         "steps": 2,
                     }
+
             else:
+
                 return {
-                    "answer": f"Error al consultar el sistema: {e}",
-                    "data": {"rows": [], "row_count": 0},
+                    "answer": (
+                        f"Error al consultar "
+                        f"el sistema: {e}"
+                    ),
+                    "data": {
+                        "rows": [],
+                        "row_count": 0,
+                    },
                     "steps": 1,
                 }
 
-        # ── Paso 3: normalizar rows ─────────────────────────
+        # =====================================================
+        # PASO 3 — NORMALIZAR ROWS
+        # =====================================================
         rows = _unwrap_rows(raw)
 
-        if tool_name in ("patient_filter", "patient_list", "patient_get"):
-            rows = [_flatten_patient_row(r) for r in rows]
+        if tool_name in (
+            "patient_filter",
+            "patient_list",
+            "patient_get",
+        ):
+            rows = [
+                _flatten_patient_row(r)
+                for r in rows
+            ]
 
-        # para tools que devuelven dict plano (stats, dashboard)
+        # =====================================================
+        # FIX SEGURO / ESTADO CIVIL
+        # =====================================================
+        normalized_rows = []
+
+        for row in rows:
+
+            if not isinstance(row, dict):
+                normalized_rows.append(row)
+                continue
+
+            persona = row.get("persona") or {}
+
+            seguro_num = (
+                persona.get("num_seguro")
+                or row.get("num_seguro")
+                or None
+            )
+
+            empresa_seg = (
+                persona.get("empresa_seg")
+                or row.get("empresa_seg")
+                or None
+            )
+
+            estado_civil = (
+                persona.get("estado_civil")
+                or row.get("estado_civil")
+                or None
+            )
+
+            telefono = (
+                persona.get("telf1")
+                or persona.get("telf2")
+                or persona.get("tel_referencia")
+                or row.get("telefono")
+                or None
+            )
+
+            row["num_seguro"] = seguro_num
+            row["empresa_seg"] = empresa_seg
+            row["estado_civil"] = estado_civil
+            row["telefono"] = telefono
+
+            row["tiene_seguro"] = bool(
+                seguro_num or empresa_seg
+            )
+
+            row["tiene_telefono"] = bool(
+                telefono
+            )
+
+            row["tiene_estado_civil"] = (
+                estado_civil is not None
+            )
+
+            normalized_rows.append(row)
+
+        rows = normalized_rows
+
+        # =====================================================
+        # CONTEXTO EXTRA
+        # =====================================================
         extra_context = ""
+
         if not rows and isinstance(raw, dict):
-            extra_context = json.dumps(raw, ensure_ascii=False, default=str)
 
-        # ── Paso 4: LLM analiza ─────────────────────────────
-        answer = self._analyze(question, rows, extra_context=extra_context)
+            extra_context = json.dumps(
+                raw,
+                ensure_ascii=False,
+                default=str,
+            )
 
-        # La tabla refleja exactamente lo que devolvió el MCP.
-        # Si el LLM dice "no hay" pero el MCP sí tiene datos, el LLM se equivocó —
-        # en ese caso reemplazamos la respuesta con una automática basada en los datos reales.
-        _NO_RESULT_PHRASES = ("no hay", "no existe", "no encontré", "no encontre",
-                              "ningún", "ningun", "vacía", "vacia", "sin registros", "no se encontr")
-        llm_says_empty = any(p in answer.lower() for p in _NO_RESULT_PHRASES)
+        # =====================================================
+        # PASO 4 — ANALIZAR
+        # =====================================================
+        answer = self._analyze(
+            question,
+            rows,
+            extra_context=extra_context,
+        )
+
+        # =====================================================
+        # VALIDACIÓN
+        # =====================================================
+        _NO_RESULT_PHRASES = (
+            "no hay",
+            "no existe",
+            "no encontré",
+            "no encontre",
+            "ningún",
+            "ningun",
+            "vacía",
+            "vacia",
+            "sin registros",
+            "no se encontr",
+        )
+
+        llm_says_empty = any(
+            p in answer.lower()
+            for p in _NO_RESULT_PHRASES
+        )
 
         _TOOL_NOUN = {
-            "patient_filter": "pacientes", "patient_list": "pacientes", "patient_get": "paciente",
-            "citas_filter": "citas", "citas_list": "citas", "citas_by_patient": "citas",
-            "visitas_by_patient": "visitas", "visitas_by_cita": "visitas",
-            "payments_list": "pagos", "payments_by_patient": "pagos",
-            "estudios_by_patient": "estudios", "estudios_by_cita": "estudios",
-            "recetas_by_visita": "recetas", "notas_by_cita": "notas",
-            "archivos_by_patient": "archivos", "antecedents_get": "antecedentes",
+            "patient_filter": "pacientes",
+            "patient_list": "pacientes",
+            "patient_get": "paciente",
+            "citas_filter": "citas",
+            "citas_list": "citas",
+            "citas_by_patient": "citas",
+            "visitas_by_patient": "visitas",
+            "visitas_by_cita": "visitas",
+            "payments_list": "pagos",
+            "payments_by_patient": "pagos",
+            "estudios_by_patient": "estudios",
+            "estudios_by_cita": "estudios",
+            "recetas_by_visita": "recetas",
+            "notas_by_cita": "notas",
+            "archivos_by_patient": "archivos",
+            "antecedents_get": "antecedentes",
         }
 
         if llm_says_empty and rows:
-            noun = _TOOL_NOUN.get(tool_name, "registros")
-            answer = f"Encontré {len(rows)} {noun}."
-            _log(f"[SYNC] LLM dijo vacío pero MCP devolvió {len(rows)} rows — respuesta corregida")
 
-        # ── Paso 5: Excel ───────────────────────────────────
-        sheet = tool_name.split("_")[0].capitalize()
-        excel_b64 = _rows_to_excel_b64(rows, sheet_name=sheet) if rows else None
-        excel_name = f"{tool_name.split('_')[0]}.xlsx" if excel_b64 else None
+            noun = _TOOL_NOUN.get(
+                tool_name,
+                "registros",
+            )
+
+            answer = (
+                f"Encontré "
+                f"{len(rows)} {noun}."
+            )
+
+            _log(
+                f"[SYNC] LLM dijo vacío "
+                f"pero MCP devolvió "
+                f"{len(rows)} rows"
+            )
+
+        # =====================================================
+        # PASO 5 — EXCEL
+        # =====================================================
+        sheet = (
+            tool_name
+            .split("_")[0]
+            .capitalize()
+        )
+
+        excel_b64 = (
+            _rows_to_excel_b64(
+                rows,
+                sheet_name=sheet,
+            )
+            if rows else None
+        )
+
+        excel_name = (
+            f"{tool_name.split('_')[0]}.xlsx"
+            if excel_b64
+            else None
+        )
 
         return {
             "answer": answer,
-            "data": {"rows": rows, "row_count": len(rows)},
+            "data": {
+                "rows": rows,
+                "row_count": len(rows),
+            },
             "steps": 2,
             "excel_bytes": excel_b64,
             "excel_name": excel_name,
@@ -930,58 +1583,174 @@ Devuelve SOLO JSON válido:
 # =========================================================
 # Bootstrap MCP Node
 # =========================================================
-async def ask_with_embedded_mcp(question: str) -> Dict[str, Any]:
-    node_entry   = os.getenv("NODE_MCP_ENTRY", "").strip()
-    api_base_url = os.getenv("API_BASE_URL", "").strip()
-    node_cwd     = os.getenv("NODE_MCP_CWD", "").strip() or (os.path.dirname(node_entry) if node_entry else "")
+async def ask_with_embedded_mcp(
+    question: str,
+) -> Dict[str, Any]:
 
-    if not node_entry or not os.path.isfile(node_entry):
-        return {"answer": "Falta NODE_MCP_ENTRY.", "data": {"rows": [], "row_count": 0}, "steps": 0}
+    node_entry = os.getenv(
+        "NODE_MCP_ENTRY",
+        "",
+    ).strip()
+
+    api_base_url = os.getenv(
+        "API_BASE_URL",
+        "",
+    ).strip()
+
+    node_cwd = (
+        os.getenv(
+            "NODE_MCP_CWD",
+            "",
+        ).strip()
+        or (
+            os.path.dirname(node_entry)
+            if node_entry else ""
+        )
+    )
+
+    if (
+        not node_entry
+        or not os.path.isfile(node_entry)
+    ):
+        return {
+            "answer": "Falta NODE_MCP_ENTRY.",
+            "data": {
+                "rows": [],
+                "row_count": 0,
+            },
+            "steps": 0,
+        }
+
     if not api_base_url:
-        return {"answer": "Falta API_BASE_URL.", "data": {"rows": [], "row_count": 0}, "steps": 0}
+        return {
+            "answer": "Falta API_BASE_URL.",
+            "data": {
+                "rows": [],
+                "row_count": 0,
+            },
+            "steps": 0,
+        }
 
     env = {
         **os.environ,
         "API_BASE_URL": api_base_url,
         "NODE_NO_WARNINGS": "1",
-        "HTTP_TIMEOUT_MS": os.getenv("HTTP_TIMEOUT_MS", "25000"),
+        "HTTP_TIMEOUT_MS": os.getenv(
+            "HTTP_TIMEOUT_MS",
+            "25000",
+        ),
     }
+
     cmd = ["node", node_entry]
-    server_params = StdioServerParameters(command=cmd[0], args=cmd[1:], env=env, cwd=node_cwd)
+
+    server_params = StdioServerParameters(
+        command=cmd[0],
+        args=cmd[1:],
+        env=env,
+        cwd=node_cwd,
+    )
+
     _log(f"Starting MCP: {node_entry}")
 
-    thinker_client, thinker_model, answerer_client, answerer_model = _build_llm_clients()
+    thinker_client, thinker_model, answerer_client, answerer_model = (
+        _build_llm_clients()
+    )
 
     try:
-        with anyio.fail_after(OVERALL_TIMEOUT):
-            async with stdio_client(server_params) as (read, write):
-                async with ClientSession(read, write) as session:
-                    with anyio.fail_after(MCP_INIT_TIMEOUT):
+
+        with anyio.fail_after(
+            OVERALL_TIMEOUT
+        ):
+
+            async with stdio_client(
+                server_params
+            ) as (read, write):
+
+                async with ClientSession(
+                    read,
+                    write,
+                ) as session:
+
+                    with anyio.fail_after(
+                        MCP_INIT_TIMEOUT
+                    ):
                         await session.initialize()
+
                     _log("MCP initialize OK")
 
-                    tools = NodeMCPToolsProxy(session)
+                    tools = NodeMCPToolsProxy(
+                        session
+                    )
+
                     await tools.refresh_allowed_tools()
 
                     agent = MedicalAgentMCP(
                         tools,
-                        thinker_client, thinker_model,
-                        answerer_client, answerer_model,
+                        thinker_client,
+                        thinker_model,
+                        answerer_client,
+                        answerer_model,
                     )
-                    return await agent.query(question)
+
+                    return await agent.query(
+                        question
+                    )
 
     except TimeoutError:
-        _log(f"OVERALL timeout ({OVERALL_TIMEOUT}s)")
-        _diagnose_node_sync(cmd, env, cwd=node_cwd)
-        return {"answer": f"Timeout ({OVERALL_TIMEOUT}s).", "data": {"rows": [], "row_count": 0}, "steps": 0}
+
+        _log(
+            f"OVERALL timeout "
+            f"({OVERALL_TIMEOUT}s)"
+        )
+
+        _diagnose_node_sync(
+            cmd,
+            env,
+            cwd=node_cwd,
+        )
+
+        return {
+            "answer": (
+                f"Timeout "
+                f"({OVERALL_TIMEOUT}s)."
+            ),
+            "data": {
+                "rows": [],
+                "row_count": 0,
+            },
+            "steps": 0,
+        }
+
     except Exception as e:
+
         _log(f"MCP failed: {repr(e)}")
-        _diagnose_node_sync(cmd, env, cwd=node_cwd)
-        return {"answer": f"Error MCP: {e}", "data": {"rows": [], "row_count": 0}, "steps": 0}
+
+        _diagnose_node_sync(
+            cmd,
+            env,
+            cwd=node_cwd,
+        )
+
+        return {
+            "answer": f"Error MCP: {e}",
+            "data": {
+                "rows": [],
+                "row_count": 0,
+            },
+            "steps": 0,
+        }
 
 # =========================================================
 # Runner
 # =========================================================
 class Runner:
-    def run(self, question: str) -> Dict[str, Any]:
-        return anyio.run(ask_with_embedded_mcp, question)
+
+    def run(
+        self,
+        question: str,
+    ) -> Dict[str, Any]:
+
+        return anyio.run(
+            ask_with_embedded_mcp,
+            question,
+        )
