@@ -690,7 +690,13 @@ class MedicalAgentMCP:
         if json_mode:
             kwargs["response_format"] = {"type": "json_object"}
         resp = client.chat.completions.create(**kwargs)
-        return resp.choices[0].message.content or ""
+        content = resp.choices[0].message.content
+        if isinstance(content, (dict, list)):
+            try:
+                return json.dumps(content, ensure_ascii=False)
+            except Exception:
+                return str(content)
+        return str(content or "")
 
     def _plan(self, question: str) -> Dict[str, Any]:
         """Thinker: decide qué tool llamar y con qué args (devuelve JSON)."""
@@ -701,10 +707,12 @@ class MedicalAgentMCP:
         )
         raw = self._call_llm(self.thinker, self.thinker_model,
                              system, question, temperature=0, json_mode=True)
-        _log(f"[THINKER] response: {raw[:300]}")
-        plan = _extract_json(raw)
-        if not plan:
-            _log("[THINKER] failed to parse JSON")
+        if isinstance(raw, dict):
+            plan = raw
+        else:
+            plan = _extract_json(raw)
+        if not isinstance(plan, dict):
+            _log(f"[THINKER] failed to parse JSON plan, raw={repr(raw)[:1000]}")
             return {"tool": None, "args": {}}
         return plan
 
@@ -778,8 +786,8 @@ class MedicalAgentMCP:
     async def query(self, question: str) -> Dict[str, Any]:
         # ── Paso 1: planificar ──────────────────────────────
         plan = self._plan(question)
-        tool_name = plan.get("tool")
-        args = _normalize_tool_args(plan.get("args") or {}, question)
+        tool_name = plan.get("tool") if isinstance(plan, dict) else None
+        args = _normalize_tool_args(plan.get("args") if isinstance(plan, dict) else {}, question)
 
         birthdate_name = _extract_birthdate_patient_query(question)
         if birthdate_name:
