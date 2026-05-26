@@ -639,6 +639,8 @@ def _normalize_tool_args(
     for f in normalized.get("filters", []) or []:
 
         if isinstance(f, dict) and isinstance(f.get("op"), str):
+            field = str(f.get("field", "")).strip()
+            field_lc = field.lower()
 
             key = f["op"].strip()
 
@@ -646,6 +648,32 @@ def _normalize_tool_args(
                 key.lower(),
                 key,
             )
+
+            # Normaliza aliases comunes que el planner inventa,
+            # hacia campos internos realmente soportados por el MCP.
+            if field_lc in (
+                "persona.tiene_seguro",
+                "tiene_seguro",
+            ):
+                f["field"] = "__has_seguro"
+                if f["op"] in ("contains", "startsWith", "endsWith"):
+                    f["op"] = "eq"
+
+            elif field_lc in (
+                "persona.tiene_telefono",
+                "tiene_telefono",
+            ):
+                f["field"] = "__has_phone"
+                if f["op"] in ("contains", "startsWith", "endsWith"):
+                    f["op"] = "eq"
+
+            elif field_lc in (
+                "persona.tiene_estado_civil",
+                "tiene_estado_civil",
+            ):
+                f["field"] = "__estado_civil"
+                if f["op"] == "eq" and isinstance(f.get("value"), bool):
+                    f["op"] = "exists"
 
             q = question.lower()
 
