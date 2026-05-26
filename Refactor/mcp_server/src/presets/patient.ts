@@ -49,7 +49,7 @@ export function buildPatientPresetFilters(
   if (preset?.empresa_seg) filters.push({ field: "persona.empresa_seg", op: "contains", value: preset.empresa_seg });
   if (preset?.tiene_seguro === true) filters.push({ field: "__has_seguro", op: "eq", value: true });
   if (preset?.tiene_seguro === false) filters.push({ field: "__has_seguro", op: "eq", value: false });
-  if (preset?.estado_civil) filters.push({ field: "persona.estado_civil", op: "contains", value: preset.estado_civil });
+  if (preset?.estado_civil) filters.push({ field: "persona.estado_civil", op: "eq", value: preset.estado_civil });
   if (preset?.tiene_telefono === true) filters.push({ field: "__has_phone", op: "eq", value: true });
   if (preset?.tiene_telefono === false) filters.push({ field: "__has_phone", op: "eq", value: false });
 

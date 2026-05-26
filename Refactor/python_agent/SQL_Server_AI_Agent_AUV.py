@@ -132,6 +132,10 @@ PACIENTES (patient_filter):
   persona.fecha_nacimiento → ISO: 2026-04-06T04:00:00.000000Z
   persona.ocupacion, persona.direccion, persona.telf1, persona.telf2, persona.tel_referencia
   persona.num_seguro, persona.empresa_seg, persona.estado_civil
+  Presets útiles: tiene_telefono (true/false), tiene_seguro (true/false), estado_civil, num_seguro, empresa_seg
+  Un paciente "sin teléfono" se detecta con tiene_telefono=false.
+  Un paciente "sin seguro" se detecta con tiene_seguro=false.
+  Un paciente "sin estado civil" se detecta con {"field":"persona.estado_civil","op":"not_exists"} en filters.
   estado → true=activo | false=inactivo
 
 CITAS (citas_filter / citas_by_patient):
@@ -156,12 +160,15 @@ OPERADORES de filtro: eq, neq, gt, gte, lt, lte, contains, startsWith, endsWith,
 patient_filter acepta un campo "preset" con booleanos y strings preconstruidos.
 USA SIEMPRE presets para estas consultas en vez de filters manuales:
 
-- "pacientes sin teléfono/número"     → {{"tool":"patient_filter","args":{{"preset":{{"tiene_telefono":false}},"limit":1000}}}}
-- "pacientes con teléfono/número"     → {{"tool":"patient_filter","args":{{"preset":{{"tiene_telefono":true}},"limit":1000}}}}
-- "pacientes sin seguro"              → {{"tool":"patient_filter","args":{{"preset":{{"tiene_seguro":false}},"limit":1000}}}}
-- "pacientes con seguro"              → {{"tool":"patient_filter","args":{{"preset":{{"tiene_seguro":true}},"limit":1000}}}}
-- "pacientes sin estado civil"        → {{"tool":"patient_filter","args":{{"filters":[{{"field":"persona.estado_civil","op":"not_exists"}}],"limit":1000}}}}
-- "pacientes con estado civil soltero"→ {{"tool":"patient_filter","args":{{"preset":{{"estado_civil":"Soltero/a"}},"limit":1000}}}}- "pacientes con estado civil casado"  → {"tool":"patient_filter","args":{"preset":{"estado_civil":"Casado/a"},"limit":1000}}- "todos los pacientes"               → {{"tool":"patient_filter","args":{{"limit":1000}}}}
+Ejemplos de consultas con presets:
+- "pacientes sin teléfono/número"     → {"tool":"patient_filter","args":{"preset":{"tiene_telefono":false},"limit":1000}}
+- "pacientes con teléfono/número"     → {"tool":"patient_filter","args":{"preset":{"tiene_telefono":true},"limit":1000}}
+- "pacientes sin seguro"              → {"tool":"patient_filter","args":{"preset":{"tiene_seguro":false},"limit":1000}}
+- "pacientes con seguro"              → {"tool":"patient_filter","args":{"preset":{"tiene_seguro":true},"limit":1000}}
+- "pacientes sin estado civil"        → {"tool":"patient_filter","args":{"filters":[{"field":"persona.estado_civil","op":"not_exists"}],"limit":1000}}
+- "pacientes con estado civil soltero" → {"tool":"patient_filter","args":{"preset":{"estado_civil":"Soltero/a"},"limit":1000}}
+- "pacientes con estado civil casado"  → {"tool":"patient_filter","args":{"preset":{"estado_civil":"Casado/a"},"limit":1000}}
+- "todos los pacientes"                → {"tool":"patient_filter","args":{"limit":1000}}
 
 ═══ REGLAS ═══
 - Si la query menciona un nombre de paciente para citas/visitas/pagos → usa citas_by_patient/visitas_by_patient/payments_by_patient con patient_id=<nombre> (el sistema lo resolverá a ID automáticamente)
@@ -169,9 +176,9 @@ USA SIEMPRE presets para estas consultas en vez de filters manuales:
 - Para cumpleaños del mes/día: filtra persona.fecha_nacimiento con contains sobre el mes/día
 - Para edad: calcula el año de nacimiento y usa gt/lt en persona.fecha_nacimiento
 - Para pacientes inactivos: estado eq false
-- filters SIEMPRE debe ser una lista de objetos: {{"filters":[{{"field":"campo","op":"operador","value":"valor"}}]}}
+- filters SIEMPRE debe ser una lista de objetos: {"filters":[{"field":"campo","op":"operador","value":"valor"}]}
 - Para "pacientes que empiezan con la letra M" usa patient_filter con field="persona.nombre", op="startsWith", value="M", limit=1000
-- Nunca uses este formato: {{"filters":{{"persona.nombre":{{"contains":"M"}}}}}}
+- Nunca uses este formato: {"filters":{"persona.nombre":{"contains":"M"}}}
 - Cuando la query pida "sin" algo (sin número, sin seguro, sin estado civil), SIEMPRE usa presets o not_exists. NUNCA interpretes estas palabras como nombres de paciente.
 """
 
