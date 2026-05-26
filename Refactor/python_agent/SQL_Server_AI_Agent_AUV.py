@@ -161,8 +161,7 @@ USA SIEMPRE presets para estas consultas en vez de filters manuales:
 - "pacientes sin seguro"              → {{"tool":"patient_filter","args":{{"preset":{{"tiene_seguro":false}},"limit":1000}}}}
 - "pacientes con seguro"              → {{"tool":"patient_filter","args":{{"preset":{{"tiene_seguro":true}},"limit":1000}}}}
 - "pacientes sin estado civil"        → {{"tool":"patient_filter","args":{{"filters":[{{"field":"persona.estado_civil","op":"not_exists"}}],"limit":1000}}}}
-- "pacientes con estado civil soltero"→ {{"tool":"patient_filter","args":{{"preset":{{"estado_civil":"Soltero/a"}},"limit":1000}}}}
-- "todos los pacientes"               → {{"tool":"patient_filter","args":{{"limit":1000}}}}
+- "pacientes con estado civil soltero"→ {{"tool":"patient_filter","args":{{"preset":{{"estado_civil":"Soltero/a"}},"limit":1000}}}}- "pacientes con estado civil casado"  → {"tool":"patient_filter","args":{"preset":{"estado_civil":"Casado/a"},"limit":1000}}- "todos los pacientes"               → {{"tool":"patient_filter","args":{{"limit":1000}}}}
 
 ═══ REGLAS ═══
 - Si la query menciona un nombre de paciente para citas/visitas/pagos → usa citas_by_patient/visitas_by_patient/payments_by_patient con patient_id=<nombre> (el sistema lo resolverá a ID automáticamente)
@@ -336,9 +335,97 @@ def _is_patients_intent(q: str) -> bool:
     t = _strip_accents_lc(q or "")
     return any(w in t for w in ["paciente", "pacientes", "tabla de paciente", "tablas de paciente", "usuario", "usuarios"])
 
+def _is_explicit_all_patients_request(q: str) -> bool:
+    t = _strip_accents_lc(q or "")
+    return bool(re.search(r"\b(?:todos|todas|listado|lista)\s+(?:los|las)?\s*(?:pacientes|paciente)\b", t))
+
+def _has_patient_filter_criteria(args: dict) -> bool:
+    if not isinstance(args, dict):
+        return False
+    preset = args.get("preset")
+    if isinstance(preset, dict) and bool(preset):
+        return True
+    filters = args.get("filters")
+    if isinstance(filters, list) and any(
+        isinstance(f, dict) and (f.get("field") or f.get("op"))
+        for f in filters
+    ):
+        return True
+    search = args.get("search")
+    if isinstance(search, dict) and search.get("text"):
+        return True
+    return False
+
 def _is_citas_intent(q: str) -> bool:
     t = _strip_accents_lc(q or "")
     return any(w in t for w in ["cita", "citas", "agenda", "agendada", "agendadas", "turno", "turnos", "consulta", "consultas"])
+
+def _normalize_estado_civil_term(term: str) -> Optional[str]:
+    if not term:
+        return None
+    normalized = re.sub(r"\s+", " ", _strip_accents_lc(term).strip())
+    mapping = {
+        "casado": "Casado/a",
+        "casada": "Casado/a",
+        "casados": "Casado/a",
+        "casadas": "Casado/a",
+        "soltero": "Soltero/a",
+        "soltera": "Soltero/a",
+        "solteros": "Soltero/a",
+        "solteras": "Soltero/a",
+        "divorciado": "Divorciado/a",
+        "divorciada": "Divorciado/a",
+        "divorciados": "Divorciado/a",
+        "divorciadas": "Divorciado/a",
+        "viudo": "Viudo/a",
+        "viuda": "Viudo/a",
+        "viudos": "Viudo/a",
+        "viudas": "Viudo/a",
+        "separado": "Separado/a",
+        "separada": "Separado/a",
+        "separados": "Separado/a",
+        "separadas": "Separado/a",
+        "union libre": "Union libre",
+        "unión libre": "Union libre",
+        "unionlibre": "Union libre",
+        "uniónlibre": "Union libre",
+    }
+    if normalized in mapping:
+        return mapping[normalized]
+    if "casad" in normalized:
+        return "Casado/a"
+    if "solter" in normalized:
+        return "Soltero/a"
+    if "divorci" in normalized:
+        return "Divorciado/a"
+    if "viud" in normalized:
+        return "Viudo/a"
+    if "separ" in normalized:
+        return "Separado/a"
+    if "union" in normalized:
+        return "Union libre"
+    return None
+
+def _extract_estado_civil(question: str) -> Optional[str]:
+    q = _strip_accents_lc(question or "")
+    if not _is_patients_intent(question):
+        return None
+
+    match = re.search(
+        r"\b(?:estado\s*civil|civil)\s*(?:de|:|es|del|la)?\s*(casado|casada|casados|casadas|soltero|soltera|solteros|solteras|divorciado|divorciada|divorciados|divorciadas|viudo|viuda|viudos|viudas|separado|separada|separados|separadas|union\s+libre|unión\s+libre)\b",
+        q,
+    )
+    if match:
+        return _normalize_estado_civil_term(match.group(1))
+
+    match = re.search(
+        r"\b(casado|casada|casados|casadas|soltero|soltera|solteros|solteras|divorciado|divorciada|divorciados|divorciadas|viudo|viuda|viudos|viudas|separado|separada|separados|separadas|union\s+libre|unión\s+libre)\b",
+        q,
+    )
+    if match:
+        return _normalize_estado_civil_term(match.group(1))
+
+    return None
 
 def _apply_preset_overrides(question: str, tool_name: str, args: dict) -> tuple:
     """Red de seguridad: detecta patrones 'sin/con X' y fuerza presets correctos
@@ -364,6 +451,7 @@ def _apply_preset_overrides(question: str, tool_name: str, args: dict) -> tuple:
     has_sin_seguro = bool(re.search(r"\bsin\s+(?:seguro|num_seguro|numero\s+de\s+seguro)", q))
     has_con_seguro = bool(re.search(r"\bcon\s+(?:seguro|num_seguro|numero\s+de\s+seguro)", q))
     has_sin_estado_civil = bool(re.search(r"\bsin\s+estado\s*civil", q))
+    estado_civil_value = _extract_estado_civil(question)
 
     if has_sin_numero:
         _log("[OVERRIDE] sin número → preset tiene_telefono=false")
@@ -383,6 +471,9 @@ def _apply_preset_overrides(question: str, tool_name: str, args: dict) -> tuple:
             "filters": [{"field": "persona.estado_civil", "op": "not_exists"}],
             "limit": args.get("limit", 1000),
         }
+    if estado_civil_value:
+        _log(f"[OVERRIDE] estado civil '{estado_civil_value}' → preset estado_civil")
+        return "patient_filter", {"preset": {"estado_civil": estado_civil_value}, "limit": args.get("limit", 1000)}
 
     return tool_name, args
 
