@@ -119,7 +119,7 @@ def _build_llm_clients():
 # =========================================================
 PLANNER_SYSTEM = """\
 Eres el planificador del sistema médico SGP. Devuelve SOLO JSON válido.
-Formato: {{"tool":"nombre","args":{{}}}} o {{"tool":null,"args":{{}}}} si no aplica.
+Formato: {"tool":"nombre","args":{}} o {"tool":null,"args":{}}
 Hoy: {today}
 
 ═══ HERRAMIENTAS ═══
@@ -238,22 +238,46 @@ def _extract_birthdate_patient_query(question: str) -> Optional[str]:
     return None
 
 def _extract_json(text: str) -> Optional[dict]:
-    """Extrae el primer JSON válido del texto — tolerante a respuestas imperfectas del LLM."""
-    # bloque ```json ... ```
-    m = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", text, re.DOTALL)
+    if not text:
+        return None
+
+    candidates = []
+
+    m = re.search(r"```(?:json)?\s*(.*?)\s*```", text, re.DOTALL)
     if m:
+        candidates.append(m.group(1))
+
+    candidates.append(text)
+
+    for candidate in candidates:
         try:
-            return json.loads(m.group(1))
+            data = json.loads(candidate)
+
+            # doble serialización
+            if isinstance(data, str):
+                data = json.loads(data)
+
+            if isinstance(data, dict):
+                return data
+
         except Exception:
             pass
-    # { ... } directo
-    m = re.search(r"\{.*\}", text, re.DOTALL)
-    if m:
-        try:
-            return json.loads(m.group())
-        except Exception:
-            pass
+
     return None
+
+
+def _clean_json_keys(obj: Any) -> Any:
+    if isinstance(obj, dict):
+        cleaned: dict = {}
+        for k, v in obj.items():
+            nk = str(k).strip().strip('"').strip("'")
+            cleaned[nk] = _clean_json_keys(v)
+        return cleaned
+
+    if isinstance(obj, list):
+        return [_clean_json_keys(x) for x in obj]
+
+    return obj
 
 # Extractores adicionales (copiados desde la versión raíz)
 def _extract_sexo(question: str) -> Optional[str]:
@@ -677,7 +701,7 @@ class MedicalAgentMCP:
         self.answerer_model    = answerer_model
 
     def _call_llm(self, client, model: str, system: str, user: str,
-                  temperature: float = 0, json_mode: bool = False) -> str:
+                  temperature: float = 0) -> str:
         kwargs: Dict[str, Any] = dict(
             model=model,
             messages=[
@@ -687,8 +711,6 @@ class MedicalAgentMCP:
             temperature=temperature,
             timeout=LLM_TIMEOUT,
         )
-        if json_mode:
-            kwargs["response_format"] = {"type": "json_object"}
         resp = client.chat.completions.create(**kwargs)
         content = resp.choices[0].message.content
         if isinstance(content, (dict, list)):
@@ -706,13 +728,16 @@ class MedicalAgentMCP:
             today=today,
         )
         raw = self._call_llm(self.thinker, self.thinker_model,
-                             system, question, temperature=0, json_mode=True)
-        if isinstance(raw, dict):
-            plan = raw
-        else:
-            plan = _extract_json(raw)
+                             system, question, temperature=0)
+        _log(f"[THINKER RAW] {repr(raw)[:4000]}")
+        plan = _extract_json(raw)
+        if isinstance(plan, dict):
+            plan = _clean_json_keys(plan)
         if not isinstance(plan, dict):
             _log(f"[THINKER] failed to parse JSON plan, raw={repr(raw)[:1000]}")
+            return {"tool": None, "args": {}}
+        if "tool" not in plan:
+            _log(f"[PLAN ERROR] missing tool key: {plan}")
             return {"tool": None, "args": {}}
         return plan
 
@@ -879,7 +904,6 @@ Devuelve SOLO JSON válido:
                 ),
                 retry_prompt,
                 temperature=0,
-                json_mode=True,
             )
 
             _log(f"[RETRY RAW] {retry_raw}")
