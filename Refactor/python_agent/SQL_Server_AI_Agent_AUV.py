@@ -273,6 +273,69 @@ def _extract_blood_type(question: str) -> Optional[str]:
         return f"{grp}{sign}"
     return None
 
+def _extract_estado_civil(question: str) -> Optional[str]:
+    q = _strip_accents_lc(question or "")
+
+    mapping = {
+        "soltero": "Soltero",
+        "soltera": "Soltero",
+        "casado": "Casado",
+        "casada": "Casado",
+        "divorciado": "Divorciado",
+        "divorciada": "Divorciado",
+        "viudo": "Viudo",
+        "viuda": "Viudo",
+        "union libre": "Unión libre",
+        "concubino": "Unión libre",
+        "concubina": "Unión libre",
+    }
+
+    for k, v in mapping.items():
+        if k in q:
+            return v
+
+    return None
+
+def _extract_seguro_number(question: str) -> Optional[str]:
+    q = question or ""
+
+    patterns = [
+        r"(?:seguro|poliza|póliza|nro seguro|numero seguro)[^\d]{0,10}([A-Z0-9\-]{4,30})",
+        r"\b([A-Z]{2,5}-\d{3,20})\b",
+    ]
+
+    for p in patterns:
+        m = re.search(p, q, flags=re.IGNORECASE)
+        if m:
+            return m.group(1).strip()
+
+    return None
+
+def _asks_no_seguro(question: str) -> bool:
+    q = _strip_accents_lc(question or "")
+    patterns = [
+        "sin seguro",
+        "no tienen seguro",
+        "no tiene seguro",
+        "sin seguro medico",
+    ]
+    return any(p in q for p in patterns)
+
+def _asks_no_estado_civil(question: str) -> bool:
+    q = _strip_accents_lc(question or "")
+    patterns = [
+        "sin estado civil",
+        "no tienen estado civil",
+        "sin registrar estado civil",
+    ]
+    return any(p in q for p in patterns)
+
+def _extract_phone(question: str) -> Optional[str]:
+    q = question or ""
+    m = re.search(r"\b(\+?\d{7,15})\b", q)
+    return m.group(1) if m else None
+
+
 _NAME_TRIGGER_RE = re.compile(
     r"\b(?:llamad[ao]s?|ll[aá]mase|se llama[n]?|de nombre|con nombre|apellidad[ao]s?|apellido)\s+"
     r"([A-ZÁÉÍÓÚÜÑa-záéíóúüñ]{2,}(?:\s+[A-ZÁÉÍÓÚÜÑa-záéíóúüñ]{2,})?)",
@@ -338,16 +401,32 @@ def _birthdate_cutoff_for_age(years: int) -> str:
     return cutoff.strftime("%Y-%m-%d")
 
 def _flatten_patient_row(row: Dict[str, Any]) -> Dict[str, Any]:
-    """Aplana un objeto paciente extrayendo campos de persona."""
     persona = row.get("persona") or {}
-    nombre = " ".join(filter(None, [persona.get("nombre"), persona.get("apellidos")])) or None
+
+    nombre = " ".join(filter(None, [
+        persona.get("nombre"),
+        persona.get("apellidos")
+    ])) or None
+
     return {
         "id": row.get("id") or row.get("patient_id"),
         "nombre": nombre,
         "ci": persona.get("ci"),
         "sexo": persona.get("sexo") or "Sin género",
-        "telefono": persona.get("telf1") or persona.get("telf2"),
-        "fecha_nacimiento": (persona.get("fecha_nacimiento") or "")[:10] or None,
+
+        "telefono_1": persona.get("telf1"),
+        "telefono_2": persona.get("telf2"),
+        "telefono_referencia": persona.get("tel_referencia"),
+
+        "fecha_nacimiento": (
+            persona.get("fecha_nacimiento") or ""
+        )[:10] or None,
+
+        "estado_civil": persona.get("estado_civil"),
+
+        "num_seguro": persona.get("num_seguro"),
+        "empresa_seguro": persona.get("empresa_seg"),
+
         "estado": row.get("estado"),
     }
 
@@ -642,6 +721,52 @@ class MedicalAgentMCP:
             _log(f"[ROUTE] birthdate patient lookup name='{birthdate_name}'")
 
         _log(f"[PLAN] tool={tool_name} args={args}")
+
+        if _is_patients_intent(question):
+
+            filters = args.get("filters", [])
+
+            # ---------- Estado civil ----------
+            estado_civil = _extract_estado_civil(question)
+
+            if estado_civil:
+                tool_name = "patient_filter"
+
+                filters.append({
+                    "field": "persona.estado_civil",
+                    "op": "eq",
+                    "value": estado_civil,
+                })
+
+        if _asks_no_estado_civil(question):
+            tool_name = "patient_filter"
+
+            filters.append({
+                "field": "persona.estado_civil",
+                "op": "not_exists",
+            })
+        
+            seguro_num = _extract_seguro_number(question)
+
+        if seguro_num:
+            tool_name = "patient_filter"
+
+            filters.append({
+                "field": "persona.num_seguro",
+                "op": "contains",
+                "value": seguro_num,
+            })
+
+        if _asks_no_seguro(question):
+            tool_name = "patient_filter"
+
+            filters.append({
+                "field": "tiene_seguro",
+                "op": "eq",
+                "value": False,
+            })
+
+        args["filters"] = filters
 
         # sin tool — LLM responde directo
         if not tool_name or tool_name not in self.tools.allowed_tools:
