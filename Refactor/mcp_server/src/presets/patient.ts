@@ -16,6 +16,7 @@ export const patientPresetSchema = {
   tiene_seguro: z.boolean().optional().describe("true = tiene seguro; false = no tiene seguro"),
   nacimiento: z.string().optional(),
   estado_civil: z.string().optional(),
+  tiene_estado_civil: z.boolean().optional().describe("true = tiene estado civil; false = no tiene estado civil"),
   residencia: z.string().optional(),
   perfil: z.string().optional(),
   fecha_nacimiento_from: z.string().optional().describe("YYYY-MM-DD"),
@@ -50,6 +51,8 @@ export function buildPatientPresetFilters(
   if (preset?.tiene_seguro === true) filters.push({ field: "__has_seguro", op: "eq", value: true });
   if (preset?.tiene_seguro === false) filters.push({ field: "__has_seguro", op: "eq", value: false });
   if (preset?.estado_civil) filters.push({ field: "persona.estado_civil", op: "eq", value: preset.estado_civil });
+  if (preset?.tiene_estado_civil === true) filters.push({ field: "__estado_civil", op: "exists", value: true });
+  if (preset?.tiene_estado_civil === false) filters.push({ field: "__estado_civil", op: "exists", value: false });
   if (preset?.tiene_telefono === true) filters.push({ field: "__has_phone", op: "eq", value: true });
   if (preset?.tiene_telefono === false) filters.push({ field: "__has_phone", op: "eq", value: false });
 

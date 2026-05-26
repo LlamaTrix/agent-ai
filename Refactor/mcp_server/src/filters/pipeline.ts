@@ -118,10 +118,20 @@ export function applyFilterPipeline(params: {
       const t1 = getByPath(item, "persona.telf1") ?? getByPath(item, "telf1");
       const t2 = getByPath(item, "persona.telf2") ?? getByPath(item, "telf2");
       const tref = getByPath(item, "persona.tel_referencia") ?? getByPath(item, "tel_referencia");
-      item.__has_phone = Boolean((t1 && String(t1).trim()) || (t2 && String(t2).trim()) || (tref && String(tref).trim()));
+      const tel = getByPath(item, "persona.telefono") ?? getByPath(item, "telefono");
+      item.__has_phone = Boolean(
+        (t1 && String(t1).trim()) ||
+        (t2 && String(t2).trim()) ||
+        (tref && String(tref).trim()) ||
+        (tel && String(tel).trim()),
+      );
 
       const numSeguro = getByPath(item, "persona.num_seguro") ?? getByPath(item, "num_seguro");
-      item.__has_seguro = Boolean(numSeguro && String(numSeguro).trim());
+      const empresaSeg = getByPath(item, "persona.empresa_seg") ?? getByPath(item, "empresa_seg");
+      item.__has_seguro = Boolean(
+        (numSeguro && String(numSeguro).trim()) ||
+        (empresaSeg && String(empresaSeg).trim()),
+      );
 
       const estadoCivil = getByPath(item, "persona.estado_civil") ?? getByPath(item, "estado_civil");
       item.__estado_civil = estadoCivil ?? null;

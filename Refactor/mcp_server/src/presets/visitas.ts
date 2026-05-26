@@ -37,16 +37,16 @@ export function buildVisitasPresetFilters(preset: any) {
   if (preset?.lugar_atencion) filters.push({ field: "lugar_atencion", op: "contains", value: preset.lugar_atencion });
   if (preset?.medico) filters.push({ field: "medico", op: "contains", value: preset.medico });
 
-  if (preset?.peso_min) filters.push({ field: "peso", op: "gte", value: preset.peso_min });
-  if (preset?.peso_max) filters.push({ field: "peso", op: "lte", value: preset.peso_max });
-  if (preset?.altura_min) filters.push({ field: "altura", op: "gte", value: preset.altura_min });
-  if (preset?.altura_max) filters.push({ field: "altura", op: "lte", value: preset.altura_max });
-  if (preset?.temperatura_min) filters.push({ field: "temperatura", op: "gte", value: preset.temperatura_min });
-  if (preset?.temperatura_max) filters.push({ field: "temperatura", op: "lte", value: preset.temperatura_max });
-  if (preset?.f_cardiaca_min) filters.push({ field: "f_cardiaca", op: "gte", value: preset.f_cardiaca_min });
-  if (preset?.f_cardiaca_max) filters.push({ field: "f_cardiaca", op: "lte", value: preset.f_cardiaca_max });
-  if (preset?.f_respiratoria_min) filters.push({ field: "f_respiratoria", op: "gte", value: preset.f_respiratoria_min });
-  if (preset?.f_respiratoria_max) filters.push({ field: "f_respiratoria", op: "lte", value: preset.f_respiratoria_max });
+  if (preset?.peso_min != null) filters.push({ field: "peso", op: "gte", value: preset.peso_min });
+  if (preset?.peso_max != null) filters.push({ field: "peso", op: "lte", value: preset.peso_max });
+  if (preset?.altura_min != null) filters.push({ field: "altura", op: "gte", value: preset.altura_min });
+  if (preset?.altura_max != null) filters.push({ field: "altura", op: "lte", value: preset.altura_max });
+  if (preset?.temperatura_min != null) filters.push({ field: "temperatura", op: "gte", value: preset.temperatura_min });
+  if (preset?.temperatura_max != null) filters.push({ field: "temperatura", op: "lte", value: preset.temperatura_max });
+  if (preset?.f_cardiaca_min != null) filters.push({ field: "f_cardiaca", op: "gte", value: preset.f_cardiaca_min });
+  if (preset?.f_cardiaca_max != null) filters.push({ field: "f_cardiaca", op: "lte", value: preset.f_cardiaca_max });
+  if (preset?.f_respiratoria_min != null) filters.push({ field: "f_respiratoria", op: "gte", value: preset.f_respiratoria_min });
+  if (preset?.f_respiratoria_max != null) filters.push({ field: "f_respiratoria", op: "lte", value: preset.f_respiratoria_max });
 
   if (preset?.created_from) filters.push({ field: "created_at", op: "gte", value: preset.created_from });
   if (preset?.created_to) filters.push({ field: "created_at", op: "lte", value: preset.created_to });

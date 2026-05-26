@@ -12,6 +12,7 @@ export const filterOps = z.enum([
   "endsWith",
   "in",
   "exists",
+  "not_exists",
 ]);
 
 export const filterSchemaBase = {
