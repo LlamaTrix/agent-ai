@@ -130,13 +130,34 @@ export function applyFilterPipeline(params: {
     }
   }
 
-  out = out.filter((item: any) => {
-    for (const f of filters) {
-      const val = getByPath(item, f.field);
-      if (!compareOp(val, f.op, f.value)) return false;
+out = out.filter((item: any) => {
+  for (const f of filters) {
+
+    let val: any;
+
+    // =====================================================
+    // CAMPOS DERIVADOS / INTERNOS
+    // =====================================================
+    if (f.field === "__has_phone") {
+      val = item.__has_phone;
     }
-    return true;
-  });
+    else if (f.field === "__has_seguro") {
+      val = item.__has_seguro;
+    }
+    else if (f.field === "__estado_civil") {
+      val = item.__estado_civil;
+    }
+    else {
+      val = getByPath(item, f.field);
+    }
+
+    if (!compareOp(val, f.op, f.value)) {
+      return false;
+    }
+  }
+
+  return true;
+});
 
   if (search?.text && Array.isArray(search.fields) && search.fields.length) {
     const q = String(search.text).toLowerCase();
