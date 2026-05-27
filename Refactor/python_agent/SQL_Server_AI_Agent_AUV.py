@@ -161,7 +161,8 @@ PAGOS (payments_by_patient / payments_statistics / payments_list):
 OPERADORES de filtro: eq, neq, gt, gte, lt, lte, contains, startsWith, endsWith, in, exists, not_exists
 
 ═══ REGLAS ═══
-- Si la query menciona un nombre de paciente para citas/visitas/pagos → usa citas_by_patient/visitas_by_patient/payments_by_patient con patient_id=<nombre> (el sistema lo resolverá a ID automáticamente)
+- Si la query menciona un nombre de paciente para citas/visitas → usa citas_by_patient/visitas_by_patient con patient_id=<nombre> (el sistema lo resolverá a ID automáticamente)
+- Si la query menciona un nombre de paciente para pagos → usa payments_by_patient con patientId=<nombre> (el sistema lo resolverá a ID automáticamente)
 - Si la query pide filtrar pagos (por fecha/método/monto/saldo) → usa payments_filter (no payments_list).
 - Nunca uses patient_id con un nombre en citas_filter — usa citas_by_patient
 - Para cumpleaños del mes/día: filtra persona.fecha_nacimiento con contains sobre el mes/día
@@ -1356,6 +1357,15 @@ class MedicalAgentMCP:
                             f"patient_id '{original}' "
                             f"→ '{resolved}'"
                         )
+
+        # =====================================================
+        # NORMALIZAR ARGS POR TOOL (Zod inputShape)
+        # =====================================================
+        # payments_by_patient (generic-get) usa patientId; el planner a veces manda patient_id.
+        if tool_name == "payments_by_patient" and isinstance(args, dict):
+            if "patient_id" in args and "patientId" not in args:
+                args["patientId"] = args.pop("patient_id")
+                _log("[ARGS] payments_by_patient: patient_id -> patientId")
 
         # =====================================================
         # PASO 2 — EJECUTAR TOOL
