@@ -40,6 +40,8 @@ MCP_TOOL_TIMEOUT = int(os.getenv("MCP_TOOL_TIMEOUT", "30"))
 LLM_TIMEOUT      = int(os.getenv("LLM_TIMEOUT", "60"))
 OVERALL_TIMEOUT  = int(os.getenv("OVERALL_TIMEOUT", "120"))
 MAX_ROWS_TO_LLM  = int(os.getenv("MAX_ROWS_TO_LLM", "100"))
+MAX_LLM_INPUT_CHARS = int(os.getenv("MAX_LLM_INPUT_CHARS", "24000"))
+MAX_LLM_FIELD_CHARS = int(os.getenv("MAX_LLM_FIELD_CHARS", "300"))
 
 DEBUG_MCP    = os.getenv("DEBUG_MCP", "0").strip().lower() in ("1", "true", "yes")
 MCP_LOG_FILE = os.getenv("MCP_LOG_FILE", "").strip()
@@ -151,13 +153,16 @@ VISITAS (visitas_by_patient / visitas_by_cita):
   patient_id, cita_id
 
 PAGOS (payments_by_patient / payments_statistics / payments_list):
-  monto, saldo, metodo → "Efectivo"|"Transferencia"|"Tarjeta"
-  motivo, patient_id
+  monto, saldo, metodo → "Efectivo"|"Transferencia"|"Tarjeta"|"QR"
+  motivo, observaciones, patient_id
+  created_at, updated_at → datetime/ISO (ej: 2025-04-01 03:25:47 o 2025-04-01T03:25:47.000000Z)
+  Para filtrar por mes/día usa contains sobre created_at (ej: "2025-04").
 
 OPERADORES de filtro: eq, neq, gt, gte, lt, lte, contains, startsWith, endsWith, in, exists, not_exists
 
 ═══ REGLAS ═══
 - Si la query menciona un nombre de paciente para citas/visitas/pagos → usa citas_by_patient/visitas_by_patient/payments_by_patient con patient_id=<nombre> (el sistema lo resolverá a ID automáticamente)
+- Si la query pide filtrar pagos (por fecha/método/monto/saldo) → usa payments_filter (no payments_list).
 - Nunca uses patient_id con un nombre en citas_filter — usa citas_by_patient
 - Para cumpleaños del mes/día: filtra persona.fecha_nacimiento con contains sobre el mes/día
 - Para edad: calcula el año de nacimiento y usa gt/lt en persona.fecha_nacimiento
@@ -172,6 +177,7 @@ _PLANNER_TOOLS = {
     "patient_filter", "citas_filter", "citas_by_patient",
     "visitas_by_patient", "visitas_by_cita",
     "dashboard_stats", "payments_statistics", "payments_by_patient", "payments_list",
+    "payments_filter",
     "estudios_by_patient", "estudios_by_cita",
     "recetas_by_visita", "notas_by_cita", "archivos_by_patient",
     "antecedents_get", "clinic_bundle",
@@ -562,6 +568,44 @@ def _unwrap_rows(payload: Any) -> List[Dict[str, Any]]:
                 return v
 
     return []
+
+def _has_filter_pipeline_args(args: Any) -> bool:
+    if not isinstance(args, dict):
+        return False
+    keys = ("filters", "search", "sort", "page", "pageSize", "select", "limit", "arrayPath")
+    return any(k in args and args.get(k) not in (None, {}, [], "") for k in keys)
+
+def _compact_value_for_llm(v: Any, depth: int = 0) -> Any:
+    if v is None:
+        return None
+    if isinstance(v, (int, float, bool)):
+        return v
+    if isinstance(v, str):
+        s = v.strip()
+        if len(s) > MAX_LLM_FIELD_CHARS:
+            return s[:MAX_LLM_FIELD_CHARS] + "..."
+        return s
+    if isinstance(v, list):
+        if depth >= 2:
+            return f"[list len={len(v)}]"
+        return [_compact_value_for_llm(x, depth + 1) for x in v[:50]]
+    if isinstance(v, dict):
+        if depth >= 2:
+            return {str(k): "[obj]" for k in list(v.keys())[:20]}
+        out: Dict[str, Any] = {}
+        for k in list(v.keys())[:50]:
+            out[str(k)] = _compact_value_for_llm(v.get(k), depth + 1)
+        return out
+    return str(v)
+
+def _compact_rows_for_llm(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    out: List[Dict[str, Any]] = []
+    for r in rows:
+        if isinstance(r, dict):
+            out.append(_compact_value_for_llm(r, 0))
+        else:
+            out.append({"value": _compact_value_for_llm(r, 0)})
+    return out
 
 def _normalize_tool_args(
     args: Any,
@@ -1011,27 +1055,19 @@ class MedicalAgentMCP:
             safe_wrapper_start = "=== DATOS_JSON_SEGUROS ==="
             safe_wrapper_end = "=== FIN_DATOS_JSON ==="
 
-            if total <= MAX_ROWS_TO_LLM:
+            compacted = _compact_rows_for_llm(rows)
+            max_rows = min(total, MAX_ROWS_TO_LLM)
+            sample = compacted[:max_rows]
 
-                data_str = json.dumps(
-                    rows,
-                    ensure_ascii=False,
-                    default=str,
-                    separators=(",", ":"),
-                )
+            data_str = json.dumps(
+                sample,
+                ensure_ascii=False,
+                default=str,
+                separators=(",", ":"),
+            )
 
-                user_msg = (
-                    f"Q: {question}\n"
-                    f"Total:{total}\n"
-                    f"{safe_wrapper_start}\n"
-                    f"{data_str}\n"
-                    f"{safe_wrapper_end}"
-                )
-
-            else:
-
-                sample = rows[:MAX_ROWS_TO_LLM]
-
+            while len(data_str) > MAX_LLM_INPUT_CHARS and len(sample) > 1:
+                sample = sample[: max(1, len(sample) // 2)]
                 data_str = json.dumps(
                     sample,
                     ensure_ascii=False,
@@ -1039,14 +1075,20 @@ class MedicalAgentMCP:
                     separators=(",", ":"),
                 )
 
-                user_msg = (
-                    f"Q: {question}\n"
-                    f"Total:{total} "
-                    f"(muestra de {MAX_ROWS_TO_LLM})\n"
-                    f"{safe_wrapper_start}\n"
-                    f"{data_str}\n"
-                    f"{safe_wrapper_end}"
-                )
+            sampled_n = len(sample)
+            header = (
+                f"Total:{total}\n"
+                if sampled_n == total
+                else f"Total:{total} (muestra de {sampled_n})\n"
+            )
+
+            user_msg = (
+                f"Q: {question}\n"
+                f"{header}"
+                f"{safe_wrapper_start}\n"
+                f"{data_str}\n"
+                f"{safe_wrapper_end}"
+            )
 
         return self._call_llm(
             self.answerer,
@@ -1194,6 +1236,13 @@ class MedicalAgentMCP:
                 f"[ROUTE] birthdate lookup "
                 f"name='{birthdate_name}'"
             )
+
+        # Si el planner eligió un "list/get" pero incluyó filtros/paginación,
+        # preferimos el tool *_filter (determinístico) para que el filtro sí se aplique.
+        if tool_name == "payments_list" and _has_filter_pipeline_args(args):
+            if "payments_filter" in self.tools.allowed_tools:
+                _log("[ROUTE] payments_list + filtros → payments_filter")
+                tool_name = "payments_filter"
 
         _log(
             f"[PLAN] tool={tool_name} "
