@@ -193,7 +193,13 @@ out = out.filter((item: any) => {
         f.field === "fecha_nacimiento") &&
       (f.op === "exists" || f.op === "not_exists")
     ) {
-      val = item.__has_birthdate;
+      const hasBirthdate = Boolean(item.__has_birthdate);
+      if (f.op === "not_exists") {
+        if (hasBirthdate) return false;
+        continue;
+      }
+      if (!hasBirthdate) return false;
+      continue;
     }
     else {
       val = getByPath(item, f.field);
