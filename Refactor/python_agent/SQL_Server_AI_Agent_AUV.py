@@ -153,6 +153,12 @@ VISITAS (visitas_by_patient / visitas_by_cita):
   p_arterial_1, p_arterial_5
   patient_id, cita_id
 
+ODONTOGRAMAS (odontogramas):
+  diente, diagnostico, tratamiento, costo
+  cita_id, patient_id
+  usa odontogramas con cita_id cuando la pregunta menciona una cita concreta
+  usa odontogramas con patient_id cuando la pregunta menciona un paciente concreto
+
 PAGOS (payments_by_patient / payments_statistics / payments_list):
   monto, saldo, metodo → "Efectivo"|"Transferencia"|"Tarjeta"|"QR"
   motivo, observaciones, patient_id
@@ -178,6 +184,7 @@ OPERADORES de filtro: eq, neq, gt, gte, lt, lte, contains, startsWith, endsWith,
 _PLANNER_TOOLS = {
     "patient_filter", "citas_filter", "citas_by_patient",
     "visitas_by_patient", "visitas_by_cita",
+    "odontogramas",
     "dashboard_stats", "payments_statistics", "payments_by_patient", "payments_list",
     "payments_filter",
     "estudios_by_patient", "estudios_by_cita",
@@ -1645,6 +1652,7 @@ Devuelve SOLO JSON válido:
             "citas_by_patient": "citas",
             "visitas_by_patient": "visitas",
             "visitas_by_cita": "visitas",
+            "odontogramas": "odontogramas",
             "payments_list": "pagos",
             "payments_by_patient": "pagos",
             "estudios_by_patient": "estudios",

@@ -8,6 +8,7 @@ import { registerAntecedentsTools } from "./antecedents.js";
 // import { registerBundleTool } from "./bundle.js";
 import { registerPatientFilterTools } from "./patient.js";
 import { registerPaymentsTools } from "./payments.js";
+import { registerOdontogramasTools } from "./odontogramas.js";
 
 export function registerAllTools(server: McpServer) {
   registerGenericGetTools(server);
@@ -19,4 +20,5 @@ export function registerAllTools(server: McpServer) {
   // registerBundleTool(server);
   registerPatientFilterTools(server);
   registerPaymentsTools(server);
+  registerOdontogramasTools(server);
 }
