@@ -131,10 +131,11 @@ Hoy: {today}
 PACIENTES (patient_filter):
   persona.nombre, persona.apellidos, persona.ci, persona.sangre
   persona.sexo → valores exactos: Femenino | Masculino | Otro | (null=Sin género)
-  persona.fecha_nacimiento → ISO: 2026-04-06T04:00:00.000000Z
+  persona.fecha_nacimiento → ISO: YYYY-MM-DD o fecha-hora ISO
   persona.ocupacion, persona.direccion, persona.telf1, persona.telf2, persona.tel_referencia
   persona.num_seguro, persona.empresa_seg, persona.estado_civil
-  Presets útiles: tiene_telefono (true/false), tiene_seguro (true/false), estado_civil, num_seguro, empresa_seg
+  Presets útiles: tiene_telefono (true/false), tiene_seguro (true/false), tiene_fecha_nacimiento (true/false), estado_civil, num_seguro, empresa_seg
+  Un paciente "sin fecha de nacimiento" se detecta con tiene_fecha_nacimiento=false o persona.fecha_nacimiento=null o not_exists.
   Un paciente "sin teléfono" se detecta con tiene_telefono=false.
   Un paciente "sin seguro" se detecta con tiene_seguro=false.
   Un paciente "sin estado civil" se detecta con persona.estado_civil=null o not_exists.

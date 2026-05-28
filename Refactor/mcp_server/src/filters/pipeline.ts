@@ -57,6 +57,33 @@ export function toComparable(v: any) {
   return v;
 }
 
+function isMeaningfulBirthdate(value: any) {
+  if (value == null) return false;
+
+  if (value instanceof Date) {
+    return !Number.isNaN(value.getTime()) && value.getTime() <= Date.now();
+  }
+
+  if (typeof value !== "string") return false;
+
+  const s = value.trim();
+  if (!s) return false;
+
+  const normalized = s.slice(0, 10);
+  if (normalized === "0000-00-00") {
+    return false;
+  }
+
+  const ms = Date.parse(s);
+  if (Number.isNaN(ms)) return false;
+
+  const parsed = new Date(ms);
+  if (parsed.getTime() > Date.now()) return false;
+  if (parsed.getUTCFullYear() < 1900) return false;
+
+  return true;
+}
+
 export function compareOp(a: any, op: string, b: any) {
   const A = toComparable(a);
   const B = toComparable(b);
@@ -135,6 +162,9 @@ export function applyFilterPipeline(params: {
 
       const estadoCivil = getByPath(item, "persona.estado_civil") ?? getByPath(item, "estado_civil");
       item.__estado_civil = estadoCivil ?? null;
+
+      const birthdate = getByPath(item, "persona.fecha_nacimiento") ?? getByPath(item, "fecha_nacimiento");
+      item.__has_birthdate = isMeaningfulBirthdate(birthdate);
     } catch (e) {
       // ignore derivation errors
     }
@@ -156,6 +186,14 @@ out = out.filter((item: any) => {
     }
     else if (f.field === "__estado_civil") {
       val = item.__estado_civil;
+    }
+    else if (
+      (f.field === "__has_birthdate" ||
+        f.field === "persona.fecha_nacimiento" ||
+        f.field === "fecha_nacimiento") &&
+      (f.op === "exists" || f.op === "not_exists")
+    ) {
+      val = item.__has_birthdate;
     }
     else {
       val = getByPath(item, f.field);
