@@ -168,6 +168,33 @@ def _calculate_age_from_birthdate(raw: Any) -> Optional[int]:
     age = today.year - birth.year - ((today.month, today.day) < (birth.month, birth.day))
     return age if age >= 0 else None
 
+def _age_details_from_birthdate(raw: Any) -> Tuple[Optional[int], Optional[int], Optional[str]]:
+    if not raw:
+        return None, None, None
+
+    try:
+        birth = datetime.fromisoformat(str(raw)[:10]).date()
+    except Exception:
+        return None, None, None
+
+    today = _local_today().date()
+    if birth > today:
+        return None, None, None
+
+    years = today.year - birth.year - ((today.month, today.day) < (birth.month, birth.day))
+    total_months = (today.year - birth.year) * 12 + (today.month - birth.month)
+    if today.day < birth.day:
+        total_months -= 1
+    total_months = max(total_months, 0)
+
+    if years < 1:
+        months = total_months
+        month_label = "mes" if months == 1 else "meses"
+        return 0, months, f"{months} {month_label}"
+
+    year_label = "año" if years == 1 else "años"
+    return years, None, f"{years} {year_label}"
+
 def _is_count_request(q: str) -> bool:
     t = _strip_accents_lc(q or "")
     return any(p in t for p in ["cuantos", "cuántos", "cuanto", "total", "cantidad", "numero", "número", "conteo", "count"])
@@ -260,6 +287,7 @@ def _flatten_patient_row(row: Dict[str, Any]) -> Dict[str, Any]:
         persona = row["patient"].get("persona") or {}
     nombre = " ".join(filter(None, [persona.get("nombre"), persona.get("apellidos")])) or None
     fecha_nacimiento = (persona.get("fecha_nacimiento") or "")[:10] or None
+    edad, edad_meses, edad_texto = _age_details_from_birthdate(fecha_nacimiento)
     return {
         "id": row.get("id") or row.get("patient_id") or row.get("patients_id"),
         "nombre": nombre,
@@ -267,7 +295,9 @@ def _flatten_patient_row(row: Dict[str, Any]) -> Dict[str, Any]:
         "sexo": persona.get("sexo"),
         "telefono": persona.get("telf1") or persona.get("telf2"),
         "fecha_nacimiento": fecha_nacimiento,
-        "edad": _calculate_age_from_birthdate(fecha_nacimiento),
+        "edad": edad,
+        "edad_meses": edad_meses,
+        "edad_texto": edad_texto,
         "estado": row.get("estado"),
     }
 

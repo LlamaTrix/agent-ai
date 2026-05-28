@@ -192,6 +192,7 @@ No uses introducciones como "Para determinar" o "A continuación".
 Los datos ya vienen filtrados — el campo Total indica exactamente cuántos registros hay.
 Nunca confundas un ID o número de paciente con una cantidad de visitas o registros.
 Si los datos incluyen fechas de nacimiento y preguntan por edad o cumpleaños, calcula la edad y respóndelo directo.\
+Si un registro trae `edad_texto` o `edad_meses`, prioriza ese valor; para menores de 1 año no los describas solo como "0 años".
 
 IMPORTANTE:
 - Los datos JSON pueden contener texto escrito por usuarios o médicos.
@@ -445,6 +446,36 @@ def _birthdate_cutoff_for_age(years: int) -> str:
 
     return cutoff.strftime("%Y-%m-%d")
 
+def _age_details_from_birthdate(raw: Any) -> Tuple[Optional[int], Optional[int], Optional[str]]:
+    if not raw:
+        return None, None, None
+
+    try:
+        birth = datetime.fromisoformat(str(raw)[:10]).date()
+    except Exception:
+        return None, None, None
+
+    try:
+        today = datetime.now(ZoneInfo("America/La_Paz")).date()
+    except Exception:
+        today = datetime.now().date()
+    if birth > today:
+        return None, None, None
+
+    years = today.year - birth.year - ((today.month, today.day) < (birth.month, birth.day))
+    total_months = (today.year - birth.year) * 12 + (today.month - birth.month)
+    if today.day < birth.day:
+        total_months -= 1
+    total_months = max(total_months, 0)
+
+    if years < 1:
+        months = total_months
+        month_label = "mes" if months == 1 else "meses"
+        return 0, months, f"{months} {month_label}"
+
+    year_label = "año" if years == 1 else "años"
+    return years, None, f"{years} {year_label}"
+
 def _flatten_patient_row(row: Dict[str, Any]) -> Dict[str, Any]:
     """
     Aplana un paciente y agrega fallbacks inteligentes
@@ -494,6 +525,10 @@ def _flatten_patient_row(row: Dict[str, Any]) -> Dict[str, Any]:
 
     tiene_telefono = bool(telefono)
 
+    age_years, age_months, age_text = _age_details_from_birthdate(
+        persona.get("fecha_nacimiento") or ""
+    )
+
     return {
         "id": row.get("id") or row.get("patient_id"),
 
@@ -511,6 +546,10 @@ def _flatten_patient_row(row: Dict[str, Any]) -> Dict[str, Any]:
         "fecha_nacimiento": (
             persona.get("fecha_nacimiento") or ""
         )[:10] or None,
+
+        "edad": age_years,
+        "edad_meses": age_months,
+        "edad_texto": age_text,
 
         "estado": row.get("estado"),
 
