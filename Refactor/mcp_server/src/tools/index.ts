@@ -9,6 +9,7 @@ import { registerAntecedentsTools } from "./antecedents.js";
 import { registerPatientFilterTools } from "./patient.js";
 import { registerPaymentsTools } from "./payments.js";
 import { registerOdontogramasTools } from "./odontogramas.js";
+import { registerMedicamentosTools } from "./medicamentos.js";
 
 export function registerAllTools(server: McpServer) {
   registerGenericGetTools(server);
@@ -21,4 +22,5 @@ export function registerAllTools(server: McpServer) {
   registerPatientFilterTools(server);
   registerPaymentsTools(server);
   registerOdontogramasTools(server);
+  registerMedicamentosTools(server);
 }

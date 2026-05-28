@@ -158,6 +158,11 @@ ODONTOGRAMAS (odontogramas):
   cita_id, patient_id
   usa odontogramas con cita_id cuando la pregunta menciona una cita concreta
   usa odontogramas con patient_id cuando la pregunta menciona un paciente concreto
+  nunca uses estudios_by_patient o estudios_by_cita para consultas de odontogramas
+
+MEDICAMENTOS (medicamentos):
+  listado de nombres únicos de recetas/medicamentos desde /v1/recetasMedicamentos
+  usa este tool para preguntas como "medicamentos disponibles", "catálogo de medicamentos" o "medicamentos más frecuentes"
 
 PAGOS (payments_by_patient / payments_statistics / payments_list):
   monto, saldo, metodo → "Efectivo"|"Transferencia"|"Tarjeta"|"QR"
@@ -169,6 +174,7 @@ OPERADORES de filtro: eq, neq, gt, gte, lt, lte, contains, startsWith, endsWith,
 
 ═══ REGLAS ═══
 - Si la query menciona un nombre de paciente para citas/visitas → usa citas_by_patient/visitas_by_patient con patient_id=<nombre> (el sistema lo resolverá a ID automáticamente)
+- Si la query menciona odontogramas o piezas dentales → usa odontogramas, no estudios_by_patient/estudios_by_cita
 - Si la query menciona un nombre de paciente para pagos → usa payments_by_patient con patientId=<nombre> (el sistema lo resolverá a ID automáticamente)
 - Si la query pide filtrar pagos (por fecha/método/monto/saldo) → usa payments_filter (no payments_list).
 - Nunca uses patient_id con un nombre en citas_filter — usa citas_by_patient
@@ -185,6 +191,7 @@ _PLANNER_TOOLS = {
     "patient_filter", "citas_filter", "citas_by_patient",
     "visitas_by_patient", "visitas_by_cita",
     "odontogramas",
+    "medicamentos",
     "dashboard_stats", "payments_statistics", "payments_by_patient", "payments_list",
     "payments_filter",
     "estudios_by_patient", "estudios_by_cita",
@@ -793,6 +800,22 @@ def _normalize_tool_args(
 
     return normalized
 
+def _looks_like_odontograma_query(question: str) -> bool:
+    q = _strip_accents_lc(question)
+    return any(
+        term in q
+        for term in (
+            "odontograma",
+            "odontogramas",
+            "pieza dental",
+            "piezas dentales",
+            "diente",
+            "molar",
+            "incisivo",
+            "canino",
+        )
+    )
+
 def _diagnose_node_sync(
     cmd: List[str],
     env: dict,
@@ -1261,6 +1284,16 @@ class MedicalAgentMCP:
             question,
         )
 
+        if _looks_like_odontograma_query(question):
+            if tool_name in (
+                "estudios_by_patient",
+                "estudios_by_cita",
+            ) or str(args.get("tipo_estudio", "")).strip().lower().startswith("odont"):
+                tool_name = "odontogramas"
+                for key in ("tipo_estudio", "tipo", "study", "estudio"):
+                    args.pop(key, None)
+                _log("[ROUTE] odontograma query routed to odontogramas")
+
         birthdate_name = _extract_birthdate_patient_query(
             question
         )
@@ -1376,6 +1409,7 @@ class MedicalAgentMCP:
             "citas_filter",
             "citas_by_patient",
             "visitas_by_patient",
+            "odontogramas",
             "estudios_by_patient",
             "payments_by_patient",
         ):
@@ -1653,6 +1687,7 @@ Devuelve SOLO JSON válido:
             "visitas_by_patient": "visitas",
             "visitas_by_cita": "visitas",
             "odontogramas": "odontogramas",
+            "medicamentos": "medicamentos",
             "payments_list": "pagos",
             "payments_by_patient": "pagos",
             "estudios_by_patient": "estudios",
