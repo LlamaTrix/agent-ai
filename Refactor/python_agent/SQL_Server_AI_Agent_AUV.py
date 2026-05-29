@@ -1813,6 +1813,36 @@ Devuelve SOLO JSON válido:
             else:
                 answer = "No se encontraron odontogramas."
 
+        if tool_name == "cita_by_id":
+            context_data = {}
+            if isinstance(raw, dict):
+                maybe_context = raw.get("context")
+                if isinstance(maybe_context, dict):
+                    context_data = maybe_context
+
+            cita_id_value = (
+                (rows[0].get("cita_id") if rows and isinstance(rows[0], dict) else None)
+                or context_data.get("cita_id")
+                or args.get("id")
+            )
+            patient_name = None
+            if rows and isinstance(rows[0], dict):
+                patient_name = (
+                    rows[0].get("patient_name")
+                    or rows[0].get("nombre")
+                )
+            if not patient_name:
+                patient_name = context_data.get("patient_name")
+
+            if patient_name:
+                answer = f"La cita {cita_id_value} corresponde a {patient_name}."
+            elif context_data.get("patient_id"):
+                answer = f"La cita {cita_id_value} corresponde al paciente con ID {context_data.get('patient_id')}."
+            elif rows:
+                answer = f"Encontré la cita {cita_id_value}."
+            else:
+                answer = f"No se encontró una cita con el ID {cita_id_value}."
+
         # =====================================================
         # PASO 5 — EXCEL
         # =====================================================
