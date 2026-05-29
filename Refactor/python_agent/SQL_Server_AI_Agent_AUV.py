@@ -146,6 +146,7 @@ CITAS (citas_filter / citas_by_patient):
   estado → "cerrada" | "en curso" | "pendiente" | "cancelada"
   tipo_evento → "Consulta" | "Control" | "Urgencia" | otros
   motivo, comentarios, patient_id
+  cita_by_id devuelve una cita concreta y permite saber qué paciente corresponde a un id de cita
 
 VISITAS (visitas_by_patient / visitas_by_cita):
   motivo, diagnostico, conducta, comentarios
@@ -175,6 +176,7 @@ OPERADORES de filtro: eq, neq, gt, gte, lt, lte, contains, startsWith, endsWith,
 
 ═══ REGLAS ═══
 - Si la query menciona un nombre de paciente para citas/visitas → usa citas_by_patient/visitas_by_patient con patient_id=<nombre> (el sistema lo resolverá a ID automáticamente)
+- Si la query pide el paciente de una cita específica o dice "cita 52" → usa cita_by_id con id=52
 - Si la query menciona odontogramas o piezas dentales → usa odontogramas, no estudios_by_patient/estudios_by_cita
 - Si la query menciona odontogramas por mes/fecha, filtra por cita_fecha o cita.fecha
 - Si la query menciona un nombre de paciente para pagos → usa payments_by_patient con patientId=<nombre> (el sistema lo resolverá a ID automáticamente)
@@ -190,7 +192,7 @@ OPERADORES de filtro: eq, neq, gt, gte, lt, lte, contains, startsWith, endsWith,
 
 # Tools curadas que el planificador ve — evita saturar con las 26
 _PLANNER_TOOLS = {
-    "patient_filter", "citas_filter", "citas_by_patient",
+    "patient_filter", "citas_filter", "citas_by_patient", "cita_by_id",
     "visitas_by_patient", "visitas_by_cita",
     "odontogramas",
     "medicamentos",
@@ -843,6 +845,24 @@ def _looks_like_month_or_date_query(question: str) -> bool:
         )
     )
 
+def _extract_cita_id_query(question: str) -> Optional[str]:
+    q = _strip_accents_lc(question)
+    if "cita" not in q:
+        return None
+
+    patterns = [
+        r"\bcita\s+(?:con\s+id\s+|id\s+)?(\d+)\b",
+        r"\bid\s+cita\s+(\d+)\b",
+        r"\bcita\s+(\d+)\b",
+    ]
+
+    for pattern in patterns:
+        match = re.search(pattern, q)
+        if match:
+            return match.group(1)
+
+    return None
+
 def _diagnose_node_sync(
     cmd: List[str],
     env: dict,
@@ -1311,6 +1331,17 @@ class MedicalAgentMCP:
             question,
         )
 
+        cita_id_query = _extract_cita_id_query(question)
+        if cita_id_query and (
+            tool_name in ("citas_by_patient", "citas_filter")
+            or str(args.get("patient_id", "")).strip().isdigit()
+        ):
+            tool_name = "cita_by_id"
+            args = {
+                "id": cita_id_query,
+            }
+            _log(f"[ROUTE] cita lookup routed to cita_by_id id={cita_id_query}")
+
         if _looks_like_odontograma_query(question):
             if tool_name in (
                 "estudios_by_patient",
@@ -1724,6 +1755,7 @@ Devuelve SOLO JSON válido:
             "citas_filter": "citas",
             "citas_list": "citas",
             "citas_by_patient": "citas",
+            "cita_by_id": "citas",
             "visitas_by_patient": "visitas",
             "visitas_by_cita": "visitas",
             "odontogramas": "odontogramas",

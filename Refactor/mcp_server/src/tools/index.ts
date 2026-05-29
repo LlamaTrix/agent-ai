@@ -10,6 +10,7 @@ import { registerPatientFilterTools } from "./patient.js";
 import { registerPaymentsTools } from "./payments.js";
 import { registerOdontogramasTools } from "./odontogramas.js";
 import { registerMedicamentosTools } from "./medicamentos.js";
+import { registerCitaByIdTool } from "./cita-by-id.js";
 
 export function registerAllTools(server: McpServer) {
   registerGenericGetTools(server);
@@ -23,4 +24,5 @@ export function registerAllTools(server: McpServer) {
   registerPaymentsTools(server);
   registerOdontogramasTools(server);
   registerMedicamentosTools(server);
+  registerCitaByIdTool(server);
 }
