@@ -32,6 +32,25 @@ function normalizeCitaRow(cita: any) {
   };
 }
 
+function extractPatientNameFromPatient(patient: any) {
+  return (
+    getByPath(patient, "persona.nombre") ??
+    getByPath(patient, "nombre") ??
+    getByPath(patient, "apellidos") ??
+    getByPath(patient, "persona.apellidos") ??
+    null
+  );
+}
+
+async function fetchPatientName(patientId: string | number) {
+  try {
+    const patient = await httpGetJson(`${API_BASE_URL}/v1/patient/${encodeURIComponent(String(patientId))}`);
+    return extractPatientNameFromPatient(patient);
+  } catch {
+    return null;
+  }
+}
+
 export function registerCitaByIdTool(server: McpServer) {
   server.tool(
     "cita_by_id",
@@ -50,6 +69,9 @@ export function registerCitaByIdTool(server: McpServer) {
         const match = rows.find((row: any) => String(getByPath(row, "id") ?? getByPath(row, "cita_id")) === targetId);
 
         const normalized = match ? [normalizeCitaRow(match)] : [];
+        if (normalized.length && !normalized[0].patient_name && normalized[0].patient_id != null) {
+          normalized[0].patient_name = await fetchPatientName(normalized[0].patient_id);
+        }
         const result = applyFilterPipeline({
           input: normalized,
           filters: args?.filters || [],
@@ -68,6 +90,7 @@ export function registerCitaByIdTool(server: McpServer) {
                 cita_id: getByPath(match, "id") ?? targetId,
                 patient_id: getByPath(match, "patient_id") ?? getByPath(match, "patient.id") ?? null,
                 patient_name:
+                  normalized[0]?.patient_name ??
                   getByPath(match, "patient.persona.nombre") ??
                   getByPath(match, "patient.nombre") ??
                   getByPath(match, "persona.nombre") ??
