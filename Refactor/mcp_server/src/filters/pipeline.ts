@@ -4,6 +4,10 @@ const INTERNAL_FIELDS = new Set([
   "created_at", "updated_at", "deleted_at",
   "num_seguro", "empresa_seg", "ref_medica",
   "pivot",
+  "__has_phone",
+  "__has_seguro",
+  "__estado_civil",
+  "__has_birthdate",
 ]);
 
 export function stripInternalFields(row: any): any {

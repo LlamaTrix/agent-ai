@@ -159,6 +159,7 @@ ODONTOGRAMAS (odontogramas):
   usa odontogramas con cita_id cuando la pregunta menciona una cita concreta
   usa odontogramas con patient_id cuando la pregunta menciona un paciente concreto
   nunca uses estudios_by_patient o estudios_by_cita para consultas de odontogramas
+  para filtrar por mes o fecha usa cita_fecha/cita.fecha, no created_at
 
 MEDICAMENTOS (medicamentos):
   listado de nombres únicos de recetas/medicamentos desde /v1/recetasMedicamentos
@@ -175,6 +176,7 @@ OPERADORES de filtro: eq, neq, gt, gte, lt, lte, contains, startsWith, endsWith,
 ═══ REGLAS ═══
 - Si la query menciona un nombre de paciente para citas/visitas → usa citas_by_patient/visitas_by_patient con patient_id=<nombre> (el sistema lo resolverá a ID automáticamente)
 - Si la query menciona odontogramas o piezas dentales → usa odontogramas, no estudios_by_patient/estudios_by_cita
+- Si la query menciona odontogramas por mes/fecha, filtra por cita_fecha o cita.fecha
 - Si la query menciona un nombre de paciente para pagos → usa payments_by_patient con patientId=<nombre> (el sistema lo resolverá a ID automáticamente)
 - Si la query pide filtrar pagos (por fecha/método/monto/saldo) → usa payments_filter (no payments_list).
 - Nunca uses patient_id con un nombre en citas_filter — usa citas_by_patient
@@ -816,6 +818,31 @@ def _looks_like_odontograma_query(question: str) -> bool:
         )
     )
 
+def _looks_like_month_or_date_query(question: str) -> bool:
+    q = _strip_accents_lc(question)
+    return any(
+        term in q
+        for term in (
+            "enero",
+            "febrero",
+            "marzo",
+            "abril",
+            "mayo",
+            "junio",
+            "julio",
+            "agosto",
+            "septiembre",
+            "setiembre",
+            "octubre",
+            "noviembre",
+            "diciembre",
+            "mes",
+            "fecha",
+            "dia",
+            "día",
+        )
+    )
+
 def _diagnose_node_sync(
     cmd: List[str],
     env: dict,
@@ -1294,6 +1321,12 @@ class MedicalAgentMCP:
                     args.pop(key, None)
                 _log("[ROUTE] odontograma query routed to odontogramas")
 
+            if _looks_like_month_or_date_query(question):
+                for f in args.get("filters", []) or []:
+                    if isinstance(f, dict) and f.get("field") == "created_at":
+                        f["field"] = "cita_fecha"
+                        _log("[ARGS] odontogramas: created_at -> cita_fecha")
+
         birthdate_name = _extract_birthdate_patient_query(
             question
         )
@@ -1639,7 +1672,14 @@ Devuelve SOLO JSON válido:
         # =====================================================
         extra_context = ""
 
-        if not rows and isinstance(raw, dict):
+        if isinstance(raw, dict) and raw.get("context"):
+            extra_context = json.dumps(
+                raw.get("context"),
+                ensure_ascii=False,
+                default=str,
+            )
+
+        if not extra_context and not rows and isinstance(raw, dict):
 
             extra_context = json.dumps(
                 raw,
@@ -1715,6 +1755,31 @@ Devuelve SOLO JSON válido:
                 f"pero MCP devolvió "
                 f"{len(rows)} rows"
             )
+
+        if tool_name == "odontogramas" and not rows:
+            context_blob = ""
+            context_data = {}
+            if isinstance(raw, dict):
+                maybe_context = raw.get("context")
+                if isinstance(maybe_context, dict):
+                    context_data = maybe_context
+                context_blob = json.dumps(
+                    context_data or raw,
+                    ensure_ascii=False,
+                    default=str,
+                ).lower()
+
+            patient_hint = None
+            patient_hint = context_data.get("patient_name") or context_data.get("patient_id")
+
+            if patient_hint:
+                answer = (
+                    f"No se encontraron odontogramas para {patient_hint}."
+                )
+            elif "patient_name" in context_blob or "patient_id" in context_blob:
+                answer = "No se encontraron odontogramas para ese paciente."
+            else:
+                answer = "No se encontraron odontogramas."
 
         # =====================================================
         # PASO 5 — EXCEL
