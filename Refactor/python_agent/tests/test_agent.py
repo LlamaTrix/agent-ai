@@ -176,6 +176,24 @@ class TestAgeFilters(unittest.TestCase):
         ops = sorted(f["op"] for f in fs)
         self.assertEqual(ops, ["gte", "lte"])
 
+    def test_edad_exacta_con_n_anios(self):
+        fs = ca._extract_age_filters("pacientes varones con 10 años")
+        ops = sorted(f["op"] for f in fs)
+        self.assertEqual(ops, ["gt", "lte"])  # rango de ~1 año = edad exacta
+
+    def test_edad_exacta_de_n_anios(self):
+        fs = ca._extract_age_filters("pacientes de 5 años")
+        self.assertEqual(len(fs), 2)
+
+
+class TestDescribeExc(unittest.TestCase):
+    def test_excepcion_simple(self):
+        self.assertEqual(ca._describe_exc(ValueError("boom")), "ValueError: boom")
+
+    def test_desenrolla_exception_group(self):
+        eg = ExceptionGroup("grupo", [RuntimeError("HTTP 429 rate limit")])
+        self.assertEqual(ca._describe_exc(eg), "RuntimeError: HTTP 429 rate limit")
+
 
 class TestUnwrapRows(unittest.TestCase):
     def test_lista_directa(self):

@@ -65,6 +65,19 @@ def _log(msg: str) -> None:
         except Exception:
             pass
 
+def _describe_exc(e: BaseException) -> str:
+    """Desenrolla ExceptionGroup (anyio/TaskGroup) para mostrar el error real.
+
+    Sin esto el usuario ve "unhandled errors in a TaskGroup (1 sub-exception)"
+    en vez de la causa concreta (p. ej. un 429 de Groq o un timeout HTTP).
+    """
+    subs = getattr(e, "exceptions", None)
+    if subs:
+        inner = "; ".join(_describe_exc(s) for s in subs)
+        return inner or type(e).__name__
+    msg = str(e).strip()
+    return f"{type(e).__name__}: {msg}" if msg else type(e).__name__
+
 # =========================================================
 # LLM
 # =========================================================
@@ -379,19 +392,29 @@ def _extract_age_filters(question: str) -> Optional[List[Dict[str, Any]]]:
         r"(?:a|de|que)?\s*(\d{1,3})\s*(?:anos?|anios?|edad)\b",
         q,
     )
-    if not m:
-        return None
+    if m:
+        comparator, igual, n = m.group(1), bool(m.group(2)), int(m.group(3))
+        cutoff = _birthdate_cutoff(n)
+        is_mayor = comparator.startswith("mayor") or comparator == "mas"
+        if is_mayor:
+            op = "lte" if igual else "lt"
+        else:
+            op = "gte" if igual else "gt"
+        return [{"field": field, "op": op, "value": cutoff}]
 
-    comparator, igual, n = m.group(1), bool(m.group(2)), int(m.group(3))
-    cutoff = _birthdate_cutoff(n)
-    is_mayor = comparator.startswith("mayor") or comparator == "mas"
+    # Edad exacta: "con/de N años", "tienen N años".
+    exact = re.search(
+        r"\b(?:con|de|tiene[n]?|tenga[n]?)\s+(\d{1,3})\s*(?:anos?|anios?)\b",
+        q,
+    )
+    if exact:
+        n = int(exact.group(1))
+        return [
+            {"field": field, "op": "gt", "value": _birthdate_cutoff(n + 1)},
+            {"field": field, "op": "lte", "value": _birthdate_cutoff(n)},
+        ]
 
-    if is_mayor:
-        op = "lte" if igual else "lt"
-    else:
-        op = "gte" if igual else "gt"
-
-    return [{"field": field, "op": op, "value": cutoff}]
+    return None
 
 def _age_details_from_birthdate(raw: Any) -> Tuple[Optional[int], Optional[int], Optional[str]]:
     if not raw:
@@ -2107,7 +2130,7 @@ async def ask_with_embedded_mcp(
         )
 
         return {
-            "answer": f"Error MCP: {e}",
+            "answer": f"Error MCP: {_describe_exc(e)}",
             "data": {
                 "rows": [],
                 "row_count": 0,
