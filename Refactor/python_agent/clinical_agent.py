@@ -203,7 +203,8 @@ OPERADORES de filtro: eq, neq, gt, gte, lt, lte, contains, startsWith, endsWith,
 - Si la query pide filtrar pagos (por fecha/método/monto/saldo) → usa payments_filter (no payments_list).
 - Nunca uses patient_id con un nombre en citas_filter — usa citas_by_patient
 - Para cumpleaños del mes/día: filtra persona.fecha_nacimiento con contains sobre el mes/día
-- Para edad: calcula el año de nacimiento y usa gt/lt en persona.fecha_nacimiento
+- Para edad ("mayores/menores a N años"): NO calcules fechas. Usa patient_filter con los demás
+  filtros (ej. persona.sexo); el sistema convierte la edad a fecha_nacimiento automáticamente.
 - Para pacientes inactivos: estado eq false
 - filters SIEMPRE debe ser una lista de objetos: {{"filters":[{{"field":"campo","op":"operador","value":"valor"}}]}}
 - Para "pacientes que empiezan con la letra M" usa patient_filter con field="persona.nombre", op="startsWith", value="M", limit=1000
@@ -330,6 +331,65 @@ def _is_count_question(question: str) -> bool:
     return bool(
         re.search(r"\b(cuant[oa]s?|cantidad|numero de|total de|how many)\b", q)
     )
+
+def _birthdate_cutoff(years: int) -> str:
+    """Fecha (YYYY-MM-DD) de hace `years` años desde hoy (America/La_Paz).
+
+    Sirve para traducir una edad a un corte sobre persona.fecha_nacimiento.
+    """
+    try:
+        base = datetime.now(ZoneInfo("America/La_Paz")).date()
+    except Exception:
+        base = datetime.now().date()
+    try:
+        cutoff = base.replace(year=base.year - years)
+    except ValueError:  # 29 de febrero en año no bisiesto
+        cutoff = base.replace(year=base.year - years, day=28)
+    return cutoff.strftime("%Y-%m-%d")
+
+def _extract_age_filters(question: str) -> Optional[List[Dict[str, Any]]]:
+    """Traduce condiciones de edad en lenguaje natural a filtros de fecha_nacimiento.
+
+    "mayores a N años"      → nacidos antes  del corte (más viejos)  → lt
+    "mayores o igual a N"   → nacidos en/antes del corte             → lte
+    "menores a N años"      → nacidos después del corte (más jóvenes)→ gt
+    "menores o igual a N"   → nacidos en/después del corte           → gte
+    "entre N y M años"      → rango [min, max]                       → gte+lte
+    Requiere la palabra "año(s)/edad" para no confundir otros números.
+    Devuelve None si no detecta edad.
+    """
+    q = _strip_accents_lc(question or "")
+    field = "persona.fecha_nacimiento"
+
+    rng = re.search(
+        r"\b(?:entre|de)\s+(\d{1,3})\s+(?:a|y)\s+(\d{1,3})\s*(?:anos?|anios?|edad)\b",
+        q,
+    )
+    if rng:
+        lo, hi = sorted((int(rng.group(1)), int(rng.group(2))))
+        return [
+            {"field": field, "op": "lte", "value": _birthdate_cutoff(lo)},
+            {"field": field, "op": "gte", "value": _birthdate_cutoff(hi)},
+        ]
+
+    m = re.search(
+        r"\b(mayor(?:es)?|menor(?:es)?|mas|menos)\s*(o\s*igual)?\s*"
+        r"(?:a|de|que)?\s*(\d{1,3})\s*(?:anos?|anios?|edad)\b",
+        q,
+    )
+    if not m:
+        return None
+
+    comparator, igual, n = m.group(1), bool(m.group(2)), int(m.group(3))
+    cutoff = _birthdate_cutoff(n)
+    is_mayor = comparator.startswith("mayor") or comparator == "mas"
+
+    if is_mayor:
+        op = "lte" if igual else "lt"
+    else:
+        op = "gte" if igual else "gt"
+
+    return [{"field": field, "op": op, "value": cutoff}]
 
 def _age_details_from_birthdate(raw: Any) -> Tuple[Optional[int], Optional[int], Optional[str]]:
     if not raw:
@@ -1272,6 +1332,27 @@ class MedicalAgentMCP:
             if "payments_filter" in self.tools.allowed_tools:
                 _log("[ROUTE] payments_list + filtros → payments_filter")
                 tool_name = "payments_filter"
+
+        # EDAD: el LLM no calcula bien fechas. Detectamos "mayores/menores a N años"
+        # y lo convertimos a un filtro exacto sobre persona.fecha_nacimiento.
+        age_filters = _extract_age_filters(question)
+        if age_filters:
+            if tool_name in ("patient_list", "patient_get"):
+                tool_name = "patient_filter"
+            elif tool_name in ("person_list", "person_get"):
+                tool_name = "person_filter"
+
+            if tool_name in ("patient_filter", "person_filter"):
+                # Quita intentos de edad del LLM (rotos) y deja los demás filtros.
+                existing = [
+                    f for f in (args.get("filters") or [])
+                    if isinstance(f, dict)
+                    and f.get("field") not in (
+                        "edad", "persona.fecha_nacimiento", "fecha_nacimiento",
+                    )
+                ]
+                args["filters"] = existing + age_filters
+                _log(f"[AGE] filtros de edad inyectados: {age_filters}")
 
         _log(
             f"[PLAN] tool={tool_name} "

@@ -369,6 +369,10 @@ LLM puede ser sobre-escrito** por estas reglas antes de ejecutar la tool.
 ## 11. Qué mejorar — deuda técnica / limpieza
 
 ### ✅ Ya resuelto (en este pase)
+- **Filtros de edad ("mayores/menores a N años") que no se aplicaban.** Antes la conversión edad→fecha
+  la hacía el LLM (mal) → "mayores a 10" y "menores a 10" devolvían lo mismo. Ahora `_extract_age_filters`
+  + `_birthdate_cutoff` traducen la edad a un corte exacto sobre `persona.fecha_nacimiento` en el código
+  (el LLM ya no calcula fechas). Las fechas explícitas (rango entre X e Y) ya funcionaban y no se tocaron.
 - **Conteos que no cuadraban (pageSize=50 + LLM contando la muestra).** El pipeline pagina con
   `pageSize=50`, y el agente usaba `len(rows)` como conteo descartando el `total` real del MCP →
   "pacientes masculinos" devolvía 50 aunque hubiera cientos. Fix en `clinical_agent.py`:

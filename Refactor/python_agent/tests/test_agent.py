@@ -102,6 +102,43 @@ class TestEnsureResultLimit(unittest.TestCase):
         self.assertNotIn("limit", ca._ensure_result_limit({"page": 2}))
 
 
+class TestAgeFilters(unittest.TestCase):
+    def test_cutoff_resta_anios(self):
+        from datetime import datetime
+        anio_actual = datetime.now().year
+        self.assertTrue(ca._birthdate_cutoff(10).startswith(str(anio_actual - 10)))
+
+    def test_sin_edad_devuelve_none(self):
+        self.assertIsNone(ca._extract_age_filters("dame los pacientes masculinos"))
+        self.assertIsNone(ca._extract_age_filters("de quien es la cita 52"))
+
+    def test_mayores_a_n_usa_lt(self):
+        fs = ca._extract_age_filters("pacientes varones mayores a 10 años")
+        self.assertEqual(len(fs), 1)
+        self.assertEqual(fs[0]["field"], "persona.fecha_nacimiento")
+        self.assertEqual(fs[0]["op"], "lt")
+
+    def test_menores_o_igual_usa_gte(self):
+        fs = ca._extract_age_filters("pacientes menores o igual a 10 años")
+        self.assertEqual(fs[0]["op"], "gte")
+
+    def test_mayores_y_menores_son_complementarios(self):
+        # mismo corte, ops complementarios (lt vs gte) → particionan sin solaparse
+        mayores = ca._extract_age_filters("varones mayores a 10 años")[0]
+        menores = ca._extract_age_filters("varones menores o igual a 10 años")[0]
+        self.assertEqual(mayores["value"], menores["value"])
+        self.assertEqual({mayores["op"], menores["op"]}, {"lt", "gte"})
+
+    def test_menores_a_n_usa_gt(self):
+        fs = ca._extract_age_filters("pacientes menores a 18 años")
+        self.assertEqual(fs[0]["op"], "gt")
+
+    def test_rango_entre_n_y_m(self):
+        fs = ca._extract_age_filters("pacientes entre 10 y 20 años")
+        ops = sorted(f["op"] for f in fs)
+        self.assertEqual(ops, ["gte", "lte"])
+
+
 class TestUnwrapRows(unittest.TestCase):
     def test_lista_directa(self):
         self.assertEqual(ca._unwrap_rows([{"a": 1}]), [{"a": 1}])
