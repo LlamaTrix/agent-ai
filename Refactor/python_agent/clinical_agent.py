@@ -151,6 +151,8 @@ Hoy: {today}
 PACIENTES (patient_filter):
   persona.nombre, persona.apellidos, persona.ci, persona.sangre
   persona.sexo → valores exactos: Femenino | Masculino | Otro | (null=Sin género)
+    Sinónimos: varón/hombre = Masculino; mujer/dama = Femenino. Usa SIEMPRE el valor exacto.
+    "que no sean A ni/o B" = dos filtros neq: sexo neq A Y sexo neq B (ej. neq Masculino Y neq Femenino → Otro).
   persona.fecha_nacimiento → ISO: YYYY-MM-DD o fecha-hora ISO
   persona.ocupacion, persona.direccion, persona.telf1, persona.telf2, persona.tel_referencia
   persona.num_seguro, persona.empresa_seg, persona.estado_civil
@@ -607,6 +609,23 @@ def _compact_rows_for_llm(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
             out.append({"value": _compact_value_for_llm(r, 0)})
     return out
 
+def _canonical_sexo(value: Any) -> Any:
+    """Mapea sinónimos de sexo al valor real de la BD: Masculino|Femenino|Otro.
+
+    El LLM a veces usa "varón"/"mujer" (que no existen en los datos) → el filtro
+    no matcheaba. Si el valor es desconocido, se deja igual.
+    """
+    if not isinstance(value, str):
+        return value
+    v = _strip_accents_lc(value).strip()
+    if v in ("masculino", "masculinos", "hombre", "hombres", "varon", "varones", "m"):
+        return "Masculino"
+    if v in ("femenino", "femeninos", "femenina", "femeninas", "mujer", "mujeres", "dama", "damas", "f"):
+        return "Femenino"
+    if v in ("otro", "otros", "no binario", "nobinario", "indefinido", "sin genero", "ninguno"):
+        return "Otro"
+    return value
+
 def _normalize_tool_args(
     args: Any,
     question: str = "",
@@ -718,6 +737,14 @@ def _normalize_tool_args(
                 f["field"] = "__estado_civil"
                 if f["op"] == "eq" and isinstance(f.get("value"), bool):
                     f["op"] = "exists"
+
+            elif field_lc in ("persona.sexo", "sexo"):
+                # Sinónimos (varón/mujer/hombre…) → valor real de la BD.
+                val = f.get("value")
+                if isinstance(val, list):
+                    f["value"] = [_canonical_sexo(v) for v in val]
+                else:
+                    f["value"] = _canonical_sexo(val)
 
             q = question.lower()
 

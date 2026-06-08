@@ -42,6 +42,16 @@ class TestNormalizeToolArgs(unittest.TestCase):
         self.assertEqual(out["filters"][0]["field"], "__has_phone")
         self.assertEqual(out["filters"][0]["op"], "eq")
 
+    def test_normaliza_sinonimos_de_sexo(self):
+        out = ca._normalize_tool_args({"filters": [{"field": "persona.sexo", "op": "neq", "value": "varones"}]})
+        self.assertEqual(out["filters"][0]["value"], "Masculino")
+        out = ca._normalize_tool_args({"filters": [{"field": "sexo", "op": "eq", "value": "Mujer"}]})
+        self.assertEqual(out["filters"][0]["value"], "Femenino")
+
+    def test_normaliza_sexo_en_lista_in(self):
+        out = ca._normalize_tool_args({"filters": [{"field": "persona.sexo", "op": "in", "value": ["varon", "mujer"]}]})
+        self.assertEqual(out["filters"][0]["value"], ["Masculino", "Femenino"])
+
     def test_pregunta_de_prefijo_convierte_contains_en_startswith(self):
         out = ca._normalize_tool_args(
             {"filters": [{"field": "persona.nombre", "op": "contains", "value": "M"}]},
