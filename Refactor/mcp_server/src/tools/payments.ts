@@ -11,7 +11,7 @@ export function registerPaymentsTools(server: McpServer) {
     "Filtra pagos (/v1/payments). Soporta filtros/search/sort/paginacion local sobre la respuesta del API.",
     { ...filterSchemaBase },
     async (args: any) => {
-      if (!API_BASE_URL) return errPayload("payments_filter", "API_BASE_URL no estÃ¡ configurado en env.");
+      if (!API_BASE_URL) return errPayload("payments_filter", "API_BASE_URL no está configurado en env.");
       try {
         const base = `${API_BASE_URL}/v1/payments`;
         const url = addQueryParams(base, args?.query);

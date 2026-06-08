@@ -42,6 +42,9 @@ OVERALL_TIMEOUT  = int(os.getenv("OVERALL_TIMEOUT", "120"))
 MAX_ROWS_TO_LLM  = int(os.getenv("MAX_ROWS_TO_LLM", "100"))
 MAX_LLM_INPUT_CHARS = int(os.getenv("MAX_LLM_INPUT_CHARS", "24000"))
 MAX_LLM_FIELD_CHARS = int(os.getenv("MAX_LLM_FIELD_CHARS", "300"))
+# Tope de filas que se piden al MCP cuando el planner no fijó paginación.
+# Evita que pageSize=50 del pipeline trunque conteos/listas/Excel.
+MAX_RESULT_LIMIT = int(os.getenv("MAX_RESULT_LIMIT", "5000"))
 
 DEBUG_MCP    = os.getenv("DEBUG_MCP", "0").strip().lower() in ("1", "true", "yes")
 MCP_LOG_FILE = os.getenv("MCP_LOG_FILE", "").strip()
@@ -90,13 +93,30 @@ def _build_llm_clients():
         model = os.getenv("AZURE_OPENAI_DEPLOYMENT", "gpt-4")
         return client, model, client, model
 
-    # Answerer — genera la respuesta final (modelo grande, Groq)
+    # Answerer — genera la respuesta final (modelo grande, Groq).
+    # Compat: el .env nuevo usa LLM_ANSWERER_*; el de producción usa LLAMA_*.
+    # Se leen ambos para no tener que tocar el .env de prod al deployar.
+    answerer_api_key = (
+        os.getenv("LLM_ANSWERER_API_KEY")
+        or os.getenv("LLAMA_API_KEY")
+        or "dummy-key"
+    )
+    answerer_base_url = (
+        os.getenv("LLM_ANSWERER_BASE_URL")
+        or os.getenv("LLAMA_BASE_URL")
+        or "http://localhost:11434/v1"
+    )
+    answerer_model = (
+        os.getenv("LLM_ANSWERER_MODEL")
+        or os.getenv("LLAMA_MODEL")
+        or "llama-3.3-70b-versatile"
+    )
+
     answerer_client = OpenAI(
-        api_key=os.getenv("LLM_ANSWERER_API_KEY", "dummy-key"),
-        base_url=os.getenv("LLM_ANSWERER_BASE_URL", "http://localhost:11434/v1"),
+        api_key=answerer_api_key,
+        base_url=answerer_base_url,
         timeout=LLM_TIMEOUT,
     )
-    answerer_model = os.getenv("LLM_ANSWERER_MODEL", "llama-3.3-70b-versatile")
 
     # Thinker — solo devuelve JSON con tool+args (puede ser modelo local pequeño)
     thinker_base_url = os.getenv("LLM_THINKER_BASE_URL", "").strip()
@@ -200,7 +220,7 @@ _PLANNER_TOOLS = {
     "payments_filter",
     "estudios_by_patient", "estudios_by_cita",
     "recetas_by_visita", "notas_by_cita", "archivos_by_patient",
-    "antecedents_get", "clinic_bundle",
+    "antecedents_get",
 }
 
 ANALYZER_SYSTEM = """\
@@ -304,166 +324,12 @@ def _extract_json(text: str) -> Optional[dict]:
 # =========================================================
 # Extractores
 # =========================================================
-def _extract_sexo(question: str) -> Optional[str]:
-    t = _strip_accents_lc(question or "")
-
-    if re.search(
-        r"\b(femenino|femeninos|femenina|femeninas|mujer|mujeres)\b",
-        t,
-    ):
-        return "femenino"
-
-    if re.search(
-        r"\b(masculino|masculinos|hombre|hombres|varon|varones)\b",
-        t,
-    ):
-        return "masculino"
-
-    return None
-
-def _extract_ci_like(question: str) -> Optional[str]:
-    q = question or ""
-
-    m = re.search(
-        r"\b(ci|carnet|dni|documento)\b[^0-9]{0,10}(\d{3,12})\b",
-        q,
-        flags=re.IGNORECASE,
-    )
-
-    return m.group(2) if m else None
-
-def _extract_blood_type(question: str) -> Optional[str]:
-    qlc = _strip_accents_lc(question or "")
-
-    m = re.search(
-        r"(?i)\b(AB|A|B|O)\s*([+-])(?=$|\s|[.,;:!?])",
-        question or "",
-    )
-
-    if m:
-        return f"{m.group(1).upper()}{m.group(2)}"
-
-    m2 = re.search(
-        r"\b(ab|a|b|o)\s*(positivo|negativo)\b",
-        qlc,
-    )
-
-    if m2:
-        grp = m2.group(1).upper()
-        sign = "+" if m2.group(2) == "positivo" else "-"
-        return f"{grp}{sign}"
-
-    return None
-
-_NAME_TRIGGER_RE = re.compile(
-    r"\b(?:llamad[ao]s?|ll[aá]mase|se llama[n]?|de nombre|con nombre|apellidad[ao]s?|apellido)\s+"
-    r"([A-ZÁÉÍÓÚÜÑa-záéíóúüñ]{2,}(?:\s+[A-ZÁÉÍÓÚÜÑa-záéíóúüñ]{2,})?)",
-    re.IGNORECASE,
-)
-
-def _extract_nombre(question: str) -> Optional[str]:
-    m = _NAME_TRIGGER_RE.search(question or "")
-
-    if m:
-        return m.group(1).strip()
-
+def _is_count_question(question: str) -> bool:
+    """True si la pregunta pide una cantidad ("cuántos…", "cantidad de…")."""
     q = _strip_accents_lc(question or "")
-
-    tokens = re.findall(r"[a-záéíóúüñ]+", q)
-
-    stop_words = {
-        "paciente", "pacientes", "cita", "citas",
-        "visita", "visitas", "lista", "listame",
-        "listado", "dame", "mostrar", "muestrame",
-        "ver", "buscar", "busca", "encontrar",
-        "cuantos", "hay", "el", "la", "los",
-        "las", "de", "del", "con", "para",
-        "que", "como", "quien", "un", "una",
-        "nombre", "apellido", "apellidos",
-    }
-
-    candidates = [
-        t for t in tokens
-        if t not in stop_words and len(t) > 2
-    ]
-
-    if len(candidates) >= 2:
-        return " ".join(candidates[:2])
-
-    if len(candidates) == 1:
-        return candidates[0]
-
-    return None
-
-def _extract_age_comparator(question: str) -> Optional[Tuple[str, int]]:
-    q = _strip_accents_lc(question or "")
-
-    m = re.search(
-        r"\b(?:mayor(?:es)?|mas)\s*(?:a|de|que)?\s*(\d{1,3})\s*(?:anos|ano|anios|edad)?\b",
-        q,
+    return bool(
+        re.search(r"\b(cuant[oa]s?|cantidad|numero de|total de|how many)\b", q)
     )
-
-    if m:
-        return (">", int(m.group(1)))
-
-    m2 = re.search(
-        r"\b(?:menor(?:es)?|menos)\s*(?:a|de|que)?\s*(\d{1,3})\s*(?:anos|ano|anios|edad)?\b",
-        q,
-    )
-
-    if m2:
-        return ("<", int(m2.group(1)))
-
-    return None
-
-def _is_patients_intent(q: str) -> bool:
-    t = _strip_accents_lc(q or "")
-
-    return any(
-        w in t
-        for w in (
-            "paciente",
-            "pacientes",
-            "usuario",
-            "usuarios",
-        )
-    )
-
-def _is_citas_intent(q: str) -> bool:
-    t = _strip_accents_lc(q or "")
-
-    return any(
-        w in t
-        for w in (
-            "cita",
-            "citas",
-            "agenda",
-            "turno",
-            "consulta",
-        )
-    )
-
-def _birthdate_cutoff_for_age(years: int) -> str:
-    from datetime import datetime
-
-    try:
-        base = datetime.now(
-            ZoneInfo("America/La_Paz")
-        ).date()
-    except Exception:
-        base = datetime.now().date()
-
-    try:
-        cutoff = base.replace(
-            year=base.year - years
-        )
-    except Exception:
-        cutoff = base.replace(
-            year=base.year - years,
-            day=28,
-        )
-
-    return cutoff.strftime("%Y-%m-%d")
 
 def _age_details_from_birthdate(raw: Any) -> Tuple[Optional[int], Optional[int], Optional[str]]:
     if not raw:
@@ -633,6 +499,21 @@ def _has_filter_pipeline_args(args: Any) -> bool:
         return False
     keys = ("filters", "search", "sort", "page", "pageSize", "select", "limit", "arrayPath")
     return any(k in args and args.get(k) not in (None, {}, [], "") for k in keys)
+
+def _ensure_result_limit(
+    args: Dict[str, Any],
+    default_limit: int = MAX_RESULT_LIMIT,
+) -> Dict[str, Any]:
+    """Si el plan no fijó paginación, pide el conjunto completo (hasta default_limit).
+
+    El pipeline del MCP pagina con pageSize=50 por defecto: sin esto, conteos,
+    listas y Excel quedarían truncados a 50 filas aunque haya cientos.
+    """
+    if isinstance(args, dict) and not any(
+        k in args for k in ("limit", "page", "pageSize")
+    ):
+        args["limit"] = default_limit
+    return args
 
 def _compact_value_for_llm(v: Any, depth: int = 0) -> Any:
     if v is None:
@@ -975,7 +856,6 @@ class NodeMCPToolsProxy:
                 "payments_statistics",
                 "estudios_by_patient",
                 "dashboard_stats",
-                "clinic_bundle",
             }
 
     def tools_description(self) -> str:
@@ -1157,6 +1037,7 @@ class MedicalAgentMCP:
         question: str,
         rows: List[Dict],
         extra_context: str = "",
+        total: Optional[int] = None,
     ) -> str:
 
         if extra_context:
@@ -1168,13 +1049,16 @@ class MedicalAgentMCP:
 
         else:
 
-            total = len(rows)
+            row_n = len(rows)
+            # Conteo autoritativo: el `total` del MCP (universo completo), no la
+            # cantidad de filas de la muestra que ve el LLM.
+            effective_total = total if isinstance(total, int) else row_n
 
             safe_wrapper_start = "=== DATOS_JSON_SEGUROS ==="
             safe_wrapper_end = "=== FIN_DATOS_JSON ==="
 
             compacted = _compact_rows_for_llm(rows)
-            max_rows = min(total, MAX_ROWS_TO_LLM)
+            max_rows = min(row_n, MAX_ROWS_TO_LLM)
             sample = compacted[:max_rows]
 
             data_str = json.dumps(
@@ -1195,9 +1079,9 @@ class MedicalAgentMCP:
 
             sampled_n = len(sample)
             header = (
-                f"Total:{total}\n"
-                if sampled_n == total
-                else f"Total:{total} (muestra de {sampled_n})\n"
+                f"Total:{effective_total}\n"
+                if sampled_n == effective_total
+                else f"Total:{effective_total} (muestra de {sampled_n})\n"
             )
 
             user_msg = (
@@ -1512,6 +1396,10 @@ class MedicalAgentMCP:
                 args["patientId"] = args.pop("patient_id")
                 _log("[ARGS] payments_by_patient: patient_id -> patientId")
 
+        # Sin paginación explícita → traer el conjunto completo (evita el tope
+        # de pageSize=50 que descuadraba conteos/listas/Excel).
+        args = _ensure_result_limit(args)
+
         # =====================================================
         # PASO 2 — EJECUTAR TOOL
         # =====================================================
@@ -1628,6 +1516,10 @@ Devuelve SOLO JSON válido:
         # =====================================================
         rows = _unwrap_rows(raw)
 
+        # Conteo autoritativo del MCP (universo completo, antes de paginar).
+        # Si el tool no lo provee, se cae al número de filas devueltas.
+        mcp_total = raw.get("total") if isinstance(raw, dict) else None
+
         if tool_name in (
             "patient_filter",
             "patient_list",
@@ -1698,6 +1590,13 @@ Devuelve SOLO JSON válido:
 
         rows = normalized_rows
 
+        # Conteo final: el total del MCP si vino; si no, las filas devueltas.
+        effective_total = (
+            mcp_total
+            if isinstance(mcp_total, int)
+            else len(rows)
+        )
+
         # =====================================================
         # CONTEXTO EXTRA
         # =====================================================
@@ -1725,6 +1624,7 @@ Devuelve SOLO JSON válido:
             question,
             rows,
             extra_context=extra_context,
+            total=effective_total,
         )
 
         # =====================================================
@@ -1779,13 +1679,29 @@ Devuelve SOLO JSON válido:
 
             answer = (
                 f"Encontré "
-                f"{len(rows)} {noun}."
+                f"{effective_total} {noun}."
             )
 
             _log(
                 f"[SYNC] LLM dijo vacío "
                 f"pero MCP devolvió "
                 f"{len(rows)} rows"
+            )
+
+        # Pregunta de conteo ("cuántos…") → respondemos el total REAL de forma
+        # determinística, sin depender de que el LLM cuente bien la muestra.
+        if _is_count_question(question) and rows and tool_name != "cita_by_id":
+
+            noun = _TOOL_NOUN.get(
+                tool_name,
+                "registros",
+            )
+
+            answer = f"Hay {effective_total} {noun}."
+
+            _log(
+                f"[COUNT] respuesta determinística: "
+                f"{effective_total} {noun}"
             )
 
         if tool_name == "odontogramas" and not rows:
@@ -1870,7 +1786,7 @@ Devuelve SOLO JSON válido:
             "answer": answer,
             "data": {
                 "rows": rows,
-                "row_count": len(rows),
+                "row_count": effective_total,
             },
             "steps": 2,
             "excel_bytes": excel_b64,

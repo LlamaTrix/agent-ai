@@ -1,6 +1,6 @@
 import streamlit as st
 import pandas as pd
-from SQL_Server_AI_Agent_AUV import Runner
+from clinical_agent import Runner
 
 st.title("SQL Server AI Agent")
 

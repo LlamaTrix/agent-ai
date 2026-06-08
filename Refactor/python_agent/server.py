@@ -10,7 +10,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
-from SQL_Server_AI_Agent_AUV import ask_with_embedded_mcp  # ✅ usar directo
+from clinical_agent import ask_with_embedded_mcp  # ✅ usar directo
 
 # -----------------------------
 # CORS
