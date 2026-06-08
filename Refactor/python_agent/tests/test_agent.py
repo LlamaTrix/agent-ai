@@ -112,6 +112,34 @@ class TestEnsureResultLimit(unittest.TestCase):
         self.assertNotIn("limit", ca._ensure_result_limit({"page": 2}))
 
 
+class TestSexoExclusions(unittest.TestCase):
+    def _vals(self, fs):
+        return sorted(f["value"] for f in fs)
+
+    def test_no_sean_varones_o_mujeres(self):
+        fs = ca._extract_sexo_exclusions("dame la cantidad de pacientes que no sean varones o mujeres")
+        self.assertEqual(self._vals(fs), ["Femenino", "Masculino"])
+        self.assertTrue(all(f["op"] == "neq" for f in fs))
+
+    def test_no_sean_ninos_ni_ninas(self):
+        fs = ca._extract_sexo_exclusions("pacientes que no sean niños ni niñas")
+        self.assertEqual(self._vals(fs), ["Femenino", "Masculino"])
+
+    def test_no_sean_femeninos_ni_masculinos(self):
+        fs = ca._extract_sexo_exclusions("pacientes que no sean femeninos ni masculinos")
+        self.assertEqual(self._vals(fs), ["Femenino", "Masculino"])
+
+    def test_excluir_solo_uno(self):
+        fs = ca._extract_sexo_exclusions("pacientes que no sean hombres")
+        self.assertEqual(self._vals(fs), ["Masculino"])
+
+    def test_sin_negacion_devuelve_none(self):
+        self.assertIsNone(ca._extract_sexo_exclusions("dame los pacientes masculinos"))
+
+    def test_negacion_sin_sexo_devuelve_none(self):
+        self.assertIsNone(ca._extract_sexo_exclusions("pacientes que no tengan telefono"))
+
+
 class TestAgeFilters(unittest.TestCase):
     def test_cutoff_resta_anios(self):
         from datetime import datetime

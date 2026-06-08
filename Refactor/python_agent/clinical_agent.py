@@ -609,22 +609,58 @@ def _compact_rows_for_llm(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
             out.append({"value": _compact_value_for_llm(r, 0)})
     return out
 
+# Sinónimos de sexo → valor real de la BD (claves sin acento/minúscula).
+_SEXO_SYNONYMS = {
+    "Masculino": (
+        "masculino", "masculinos", "hombre", "hombres", "varon", "varones",
+        "nino", "ninos", "chico", "chicos",
+    ),
+    "Femenino": (
+        "femenino", "femeninos", "femenina", "femeninas", "mujer", "mujeres",
+        "dama", "damas", "nina", "ninas", "chica", "chicas",
+    ),
+    "Otro": ("otro", "otros", "no binario", "nobinario", "indefinido", "sin genero"),
+}
+
 def _canonical_sexo(value: Any) -> Any:
     """Mapea sinónimos de sexo al valor real de la BD: Masculino|Femenino|Otro.
 
-    El LLM a veces usa "varón"/"mujer" (que no existen en los datos) → el filtro
-    no matcheaba. Si el valor es desconocido, se deja igual.
+    El LLM a veces usa "varón"/"mujer"/"niño" (que no existen en los datos) → el
+    filtro no matcheaba. Si el valor es desconocido, se deja igual.
     """
     if not isinstance(value, str):
         return value
     v = _strip_accents_lc(value).strip()
-    if v in ("masculino", "masculinos", "hombre", "hombres", "varon", "varones", "m"):
-        return "Masculino"
-    if v in ("femenino", "femeninos", "femenina", "femeninas", "mujer", "mujeres", "dama", "damas", "f"):
-        return "Femenino"
-    if v in ("otro", "otros", "no binario", "nobinario", "indefinido", "sin genero", "ninguno"):
-        return "Otro"
+    for canon, words in _SEXO_SYNONYMS.items():
+        if v == canon.lower() or v in words:
+            return canon
     return value
+
+def _extract_sexo_exclusions(question: str) -> Optional[List[Dict[str, Any]]]:
+    """Para "que no sean A (ni/o) B" sobre sexo → filtros neq determinísticos.
+
+    Evita depender de que el LLM mapee sinónimos y arme bien la negación.
+    Devuelve None si no hay negación de sexo.
+    """
+    q = _strip_accents_lc(question or "")
+
+    has_negation = re.search(
+        r"\bno\s+s(?:ean|on|ea|e)\b|\bexcepto\b|\bsalvo\b|\bdistint[oa]s?\b|\bfuera de\b",
+        q,
+    )
+    if not has_negation:
+        return None
+
+    excluded: List[str] = []
+    for canon, words in _SEXO_SYNONYMS.items():
+        if any(re.search(rf"\b{w}\b", q) for w in words):
+            if canon not in excluded:
+                excluded.append(canon)
+
+    if not excluded:
+        return None
+
+    return [{"field": "persona.sexo", "op": "neq", "value": c} for c in excluded]
 
 def _normalize_tool_args(
     args: Any,
@@ -1380,6 +1416,24 @@ class MedicalAgentMCP:
                 ]
                 args["filters"] = existing + age_filters
                 _log(f"[AGE] filtros de edad inyectados: {age_filters}")
+
+        # SEXO (negación): "que no sean varones ni mujeres" → neq determinísticos,
+        # sin depender de que el LLM mapee sinónimos ni arme bien la negación.
+        sexo_exclusions = _extract_sexo_exclusions(question)
+        if sexo_exclusions:
+            if tool_name in ("patient_list", "patient_get"):
+                tool_name = "patient_filter"
+            elif tool_name in ("person_list", "person_get"):
+                tool_name = "person_filter"
+
+            if tool_name in ("patient_filter", "person_filter"):
+                existing = [
+                    f for f in (args.get("filters") or [])
+                    if isinstance(f, dict)
+                    and f.get("field") not in ("sexo", "persona.sexo")
+                ]
+                args["filters"] = existing + sexo_exclusions
+                _log(f"[SEXO] exclusiones inyectadas: {sexo_exclusions}")
 
         _log(
             f"[PLAN] tool={tool_name} "

@@ -369,9 +369,11 @@ LLM puede ser sobre-escrito** por estas reglas antes de ejecutar la tool.
 ## 11. Qué mejorar — deuda técnica / limpieza
 
 ### ✅ Ya resuelto (en este pase)
-- **Sinónimos de sexo ("varón/mujer") no reconocidos.** La BD usa `Masculino|Femenino|Otro`; el LLM a
-  veces filtraba por "Varón"/"Mujer" (inexistentes) → 0 resultados. `_canonical_sexo` (en
-  `_normalize_tool_args`) mapea sinónimos al valor real. Soporta `op:"in"` con listas.
+- **Sexo: sinónimos y negaciones.** La BD usa `Masculino|Femenino|Otro`; el LLM fallaba con
+  "varón/mujer/niño/niña" (inexistentes → 0) y con negaciones. Dos capas:
+  `_canonical_sexo` (en `_normalize_tool_args`, `_SEXO_SYNONYMS`) normaliza el valor de cualquier filtro
+  de sexo (incl. `op:"in"`); y `_extract_sexo_exclusions` resuelve **"que no sean A ni/o B"** de forma
+  determinística (inyecta filtros `neq` en `query()`), sin depender de que el LLM arme la negación.
 - **Filtros de edad ("mayores/menores a N años") que no se aplicaban.** Antes la conversión edad→fecha
   la hacía el LLM (mal) → "mayores a 10" y "menores a 10" devolvían lo mismo. Ahora `_extract_age_filters`
   + `_birthdate_cutoff` traducen la edad a un corte exacto sobre `persona.fecha_nacimiento` en el código
