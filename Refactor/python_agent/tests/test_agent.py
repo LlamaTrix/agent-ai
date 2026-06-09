@@ -140,6 +140,35 @@ class TestSexoExclusions(unittest.TestCase):
         self.assertIsNone(ca._extract_sexo_exclusions("pacientes que no tengan telefono"))
 
 
+class TestPresenceFilters(unittest.TestCase):
+    def test_sin_seguro(self):
+        fs = ca._extract_presence_filters("cuantos pacientes masculinos sin seguro")
+        self.assertEqual(fs, [{"field": "__has_seguro", "op": "eq", "value": False}])
+
+    def test_con_seguro_y_telefono(self):
+        fs = ca._extract_presence_filters("pacientes asegurados con telefono")
+        campos = {f["field"]: f["value"] for f in fs}
+        self.assertEqual(campos["__has_seguro"], True)
+        self.assertEqual(campos["__has_phone"], True)
+
+    def test_sin_telefono(self):
+        fs = ca._extract_presence_filters("pacientes sin telefono")
+        self.assertEqual(fs, [{"field": "__has_phone", "op": "eq", "value": False}])
+
+    def test_sin_mencion_devuelve_none(self):
+        self.assertIsNone(ca._extract_presence_filters("dame los pacientes masculinos"))
+
+
+class TestEstadoCivil(unittest.TestCase):
+    def test_soltero_a_la_barra(self):
+        self.assertEqual(ca._canonical_estado_civil("soltero"), "Soltero/a")
+        self.assertEqual(ca._canonical_estado_civil("Solteras"), "Soltero/a")
+
+    def test_normalize_canoniza_estado_civil(self):
+        out = ca._normalize_tool_args({"filters": [{"field": "persona.estado_civil", "op": "eq", "value": "casado"}]})
+        self.assertEqual(out["filters"][0]["value"], "Casado/a")
+
+
 class TestMultiFiltro(unittest.TestCase):
     """Hito: consultas multi-filtro sobre pacientes + citas (cantidades/listas)."""
 
@@ -159,8 +188,8 @@ class TestMultiFiltro(unittest.TestCase):
         ]}
         out = ca._normalize_tool_args(args)
         self.assertEqual(len(out["filters"]), 2)               # no pierde filtros
-        self.assertEqual(out["filters"][0]["value"], "Masculino")  # canoniza sexo
-        self.assertEqual(out["filters"][1]["value"], "Soltero")    # respeta el resto
+        self.assertEqual(out["filters"][0]["value"], "Masculino")    # canoniza sexo
+        self.assertEqual(out["filters"][1]["value"], "Soltero/a")    # canoniza estado civil
 
     def test_pacientes_conteo_con_edad(self):
         q = "cuantos pacientes mayores a 65 años hay"

@@ -735,6 +735,26 @@ def _canonical_sexo(value: Any) -> Any:
     return value
 
 
+# Estado civil → valor real de la BD (la BD usa formato "Xo/a", ej. "Soltero/a").
+_ESTADO_CIVIL_SYNONYMS = {
+    "Soltero/a": ("soltero", "soltera", "solteros", "solteras", "soltero/a"),
+    "Casado/a": ("casado", "casada", "casados", "casadas", "casado/a"),
+    "Divorciado/a": ("divorciado", "divorciada", "divorciados", "divorciadas"),
+    "Viudo/a": ("viudo", "viuda", "viudos", "viudas"),
+    "Unión libre": ("union libre", "concubinato", "conviviente", "convivientes"),
+}
+
+def _canonical_estado_civil(value: Any) -> Any:
+    """Mapea "soltero/casado/..." al valor real (ej. "Soltero/a")."""
+    if not isinstance(value, str):
+        return value
+    v = _strip_accents_lc(value).strip()
+    for canon, words in _ESTADO_CIVIL_SYNONYMS.items():
+        if v in words or _strip_accents_lc(canon) == v:
+            return canon
+    return value
+
+
 def _extract_sexo_exclusions(question: str) -> Optional[List[Dict[str, Any]]]:
     """Para "que no sean A (ni/o) B" sobre sexo → filtros neq determinísticos.
 
@@ -777,6 +797,28 @@ def _extract_sexo_positive(question: str) -> Optional[str]:
             if canon not in found:
                 found.append(canon)
     return found[0] if len(found) == 1 else None
+
+
+def _extract_presence_filters(question: str) -> Optional[List[Dict[str, Any]]]:
+    """Presencia/ausencia de seguro o teléfono → filtros __has_* determinísticos.
+
+    El LLM a veces no arma bien "sin seguro" (campo/op equivocado) → 0.
+    Devuelve None si no se menciona seguro ni teléfono.
+    """
+    q = _strip_accents_lc(question or "")
+    out: List[Dict[str, Any]] = []
+
+    if re.search(r"\bsin\s+seguro\b|\bno\s+(?:tiene[n]?|estan?)\s+segur|\bno\s+asegurad|\bsin\s+asegurar", q):
+        out.append({"field": "__has_seguro", "op": "eq", "value": False})
+    elif re.search(r"\bcon\s+seguro\b|\basegurad|\btiene[n]?\s+seguro\b", q):
+        out.append({"field": "__has_seguro", "op": "eq", "value": True})
+
+    if re.search(r"\bsin\s+(?:telefono|celular|numero|tel)\b|\bno\s+tiene[n]?\s+(?:telefono|celular)", q):
+        out.append({"field": "__has_phone", "op": "eq", "value": False})
+    elif re.search(r"\bcon\s+(?:telefono|celular)\b|\btiene[n]?\s+(?:telefono|celular)", q):
+        out.append({"field": "__has_phone", "op": "eq", "value": True})
+
+    return out or None
 
 
 _MESES = {
@@ -932,6 +974,14 @@ def _normalize_tool_args(
                     f["value"] = [_canonical_sexo(v) for v in val]
                 else:
                     f["value"] = _canonical_sexo(val)
+
+            elif field_lc in ("persona.estado_civil", "estado_civil"):
+                # "soltero" → "Soltero/a" (la BD usa el formato con barra).
+                val = f.get("value")
+                if isinstance(val, list):
+                    f["value"] = [_canonical_estado_civil(v) for v in val]
+                else:
+                    f["value"] = _canonical_estado_civil(val)
 
             q = question.lower()
 
@@ -1576,6 +1626,27 @@ class MedicalAgentMCP:
                 ]
                 args["filters"] = existing + age_filters
                 _log(f"[AGE] filtros de edad inyectados: {age_filters}")
+
+        # SEGURO / TELÉFONO (presencia): "sin seguro", "con teléfono" → __has_*
+        # determinístico (el LLM a veces erra el campo/op y devolvía 0).
+        presence_filters = _extract_presence_filters(question)
+        if presence_filters:
+            if tool_name in ("patient_list", "patient_get"):
+                tool_name = "patient_filter"
+            elif tool_name in ("person_list", "person_get"):
+                tool_name = "person_filter"
+
+            if tool_name in ("patient_filter", "person_filter"):
+                _bad_pres = (
+                    "__has_seguro", "tiene_seguro", "persona.tiene_seguro",
+                    "__has_phone", "tiene_telefono", "persona.tiene_telefono",
+                )
+                kept = [
+                    f for f in (args.get("filters") or [])
+                    if isinstance(f, dict) and f.get("field") not in _bad_pres
+                ]
+                args["filters"] = kept + presence_filters
+                _log(f"[PRESENCE] filtros inyectados: {presence_filters}")
 
         # SEXO (negación): "que no sean varones ni mujeres" → neq determinísticos,
         # sin depender de que el LLM mapee sinónimos ni arme bien la negación.
