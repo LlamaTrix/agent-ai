@@ -364,6 +364,24 @@ def _is_count_question(question: str) -> bool:
         re.search(r"\b(cuant[oa]s?|cantidad|numero de|total de|how many)\b", q)
     )
 
+def _is_list_request(question: str) -> bool:
+    """True si pide registros ("dame…", "lista…", "muéstrame…", "todos los…").
+
+    Para responder el conteo exacto en vez de dejar que el LLM lo invente.
+    Excluye agregaciones (promedio/suma/máximo) donde el conteo no es la respuesta.
+    """
+    q = _strip_accents_lc(question or "")
+    if re.search(r"\b(promedio|suma|sumatoria|maximo|minimo|media)\b", q):
+        return False
+    return bool(
+        re.search(
+            r"\b(dame|damelas|damelos|dami|lista|listame|listar|listado|"
+            r"muestra|muestrame|mostrar|traeme|trae|quiero|cuales|"
+            r"todas|todos|las citas|los pacientes|los pagos)\b",
+            q,
+        )
+    )
+
 
 def _birthdate_cutoff(years: int) -> str:
     """Fecha (YYYY-MM-DD) de hace `years` años desde hoy (America/La_Paz).
@@ -2020,6 +2038,7 @@ Devuelve SOLO JSON válido:
             "odontogramas": "odontogramas",
             "medicamentos": "medicamentos",
             "payments_list": "pagos",
+            "payments_filter": "pagos",
             "payments_by_patient": "pagos",
             "estudios_by_patient": "estudios",
             "estudios_by_cita": "estudios",
@@ -2047,16 +2066,22 @@ Devuelve SOLO JSON válido:
                 f"{len(rows)} rows"
             )
 
-        # Pregunta de conteo ("cuántos…") → respondemos el total REAL de forma
-        # de1terminística, sin depender de que el LLM cuente bien la muestra.
-        if _is_count_question(question) and rows and tool_name != "cita_by_id":
-
+        # Conteo/listado ("cuántos…", "dame…", "lista…") → respondemos el total
+        # REAL determinísticamente, sin depender de que el LLM cuente bien
+        # (alucinaba números, ej. "son 24" con 343 filas).
+        _is_count = _is_count_question(question)
+        if (
+            (_is_count or _is_list_request(question))
+            and rows
+            and tool_name != "cita_by_id"
+        ):
             noun = _TOOL_NOUN.get(
                 tool_name,
                 "registros",
             )
 
-            answer = f"Hay {effective_total} {noun}."
+            verbo = "Hay" if _is_count else "Encontré"
+            answer = f"{verbo} {effective_total} {noun}."
 
             _log(
                 f"[COUNT] respuesta determinística: "

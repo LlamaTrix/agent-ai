@@ -140,6 +140,20 @@ class TestSexoExclusions(unittest.TestCase):
         self.assertIsNone(ca._extract_sexo_exclusions("pacientes que no tengan telefono"))
 
 
+class TestListRequest(unittest.TestCase):
+    def test_pide_registros(self):
+        self.assertTrue(ca._is_list_request("dame las citas del mes de abril"))
+        self.assertTrue(ca._is_list_request("muestrame los pacientes"))
+        self.assertTrue(ca._is_list_request("listame los pagos de abril"))
+
+    def test_excluye_agregaciones(self):
+        self.assertFalse(ca._is_list_request("dame el promedio de pagos"))
+        self.assertFalse(ca._is_list_request("dame la suma de montos"))
+
+    def test_no_es_pedido_de_lista(self):
+        self.assertFalse(ca._is_list_request("de quien es la cita 52"))
+
+
 class TestMonthFilter(unittest.TestCase):
     def test_mes_usa_contains_y_anio_actual(self):
         from datetime import datetime
