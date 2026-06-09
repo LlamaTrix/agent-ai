@@ -33,25 +33,28 @@ from mcp import ClientSession
 # =========================================================
 # Config
 # =========================================================
-load_dotenv(dotenv_path=os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env"))
+load_dotenv(dotenv_path=os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), ".env"))
 
 MCP_INIT_TIMEOUT = int(os.getenv("MCP_INIT_TIMEOUT", "60"))
 MCP_TOOL_TIMEOUT = int(os.getenv("MCP_TOOL_TIMEOUT", "30"))
-LLM_TIMEOUT      = int(os.getenv("LLM_TIMEOUT", "60"))
-OVERALL_TIMEOUT  = int(os.getenv("OVERALL_TIMEOUT", "120"))
-MAX_ROWS_TO_LLM  = int(os.getenv("MAX_ROWS_TO_LLM", "100"))
+LLM_TIMEOUT = int(os.getenv("LLM_TIMEOUT", "60"))
+OVERALL_TIMEOUT = int(os.getenv("OVERALL_TIMEOUT", "120"))
+MAX_ROWS_TO_LLM = int(os.getenv("MAX_ROWS_TO_LLM", "100"))
 MAX_LLM_INPUT_CHARS = int(os.getenv("MAX_LLM_INPUT_CHARS", "24000"))
 MAX_LLM_FIELD_CHARS = int(os.getenv("MAX_LLM_FIELD_CHARS", "300"))
 # Tope de filas que se piden al MCP cuando el planner no fijó paginación.
 # Evita que pageSize=50 del pipeline trunque conteos/listas/Excel.
 MAX_RESULT_LIMIT = int(os.getenv("MAX_RESULT_LIMIT", "5000"))
 
-DEBUG_MCP    = os.getenv("DEBUG_MCP", "0").strip().lower() in ("1", "true", "yes")
+DEBUG_MCP = os.getenv("DEBUG_MCP", "0").strip().lower() in ("1", "true", "yes")
 MCP_LOG_FILE = os.getenv("MCP_LOG_FILE", "").strip()
 
 # =========================================================
 # Logging
 # =========================================================
+
+
 def _log(msg: str) -> None:
     if not DEBUG_MCP and not MCP_LOG_FILE:
         return
@@ -64,6 +67,7 @@ def _log(msg: str) -> None:
                 f.write(line + "\n")
         except Exception:
             pass
+
 
 def _describe_exc(e: BaseException) -> str:
     """Desenrolla ExceptionGroup (anyio/TaskGroup) para mostrar el error real.
@@ -81,6 +85,8 @@ def _describe_exc(e: BaseException) -> str:
 # =========================================================
 # LLM
 # =========================================================
+
+
 def _build_llm_clients():
     """
     Devuelve (thinker_client, thinker_model, answerer_client, answerer_model).
@@ -100,7 +106,8 @@ def _build_llm_clients():
         client = AzureOpenAI(
             api_key=os.getenv("AZURE_OPENAI_API_KEY"),
             azure_endpoint=os.getenv("AZURE_OPENAI_ENDPOINT"),
-            api_version=os.getenv("AZURE_OPENAI_API_VERSION", "2024-08-01-preview"),
+            api_version=os.getenv(
+                "AZURE_OPENAI_API_VERSION", "2024-08-01-preview"),
             timeout=LLM_TIMEOUT,
         )
         model = os.getenv("AZURE_OPENAI_DEPLOYMENT", "gpt-4")
@@ -133,7 +140,7 @@ def _build_llm_clients():
 
     # Thinker — solo devuelve JSON con tool+args (puede ser modelo local pequeño)
     thinker_base_url = os.getenv("LLM_THINKER_BASE_URL", "").strip()
-    thinker_model    = os.getenv("LLM_THINKER_MODEL", "").strip()
+    thinker_model = os.getenv("LLM_THINKER_MODEL", "").strip()
 
     if thinker_base_url and thinker_model:
         thinker_client = OpenAI(
@@ -141,13 +148,15 @@ def _build_llm_clients():
             base_url=thinker_base_url,
             timeout=LLM_TIMEOUT,
         )
-        _log(f"[LLM] thinker={thinker_model}@{thinker_base_url} | answerer={answerer_model}")
+        _log(
+            f"[LLM] thinker={thinker_model}@{thinker_base_url} | answerer={answerer_model}")
     else:
         thinker_client = answerer_client
-        thinker_model  = answerer_model
+        thinker_model = answerer_model
         _log(f"[LLM] single model={answerer_model}")
 
     return thinker_client, thinker_model, answerer_client, answerer_model
+
 
 # =========================================================
 # Prompts
@@ -259,14 +268,18 @@ IMPORTANTE:
 # =========================================================
 # Utilidades
 # =========================================================
+
+
 def _local_today() -> str:
     return datetime.now(ZoneInfo("America/La_Paz")).strftime("%Y-%m-%d")
+
 
 def _strip_accents_lc(text: str) -> str:
     return "".join(
         c for c in unicodedata.normalize("NFD", (text or "").lower())
         if unicodedata.category(c) != "Mn"
     )
+
 
 def _clean_patient_name_fragment(fragment: str) -> str:
     name = re.sub(
@@ -277,6 +290,7 @@ def _clean_patient_name_fragment(fragment: str) -> str:
     )
     name = re.sub(r"[^\w\sáéíóúÁÉÍÓÚñÑüÜ]", " ", name)
     return " ".join(name.split())
+
 
 def _extract_birthdate_patient_query(question: str) -> Optional[str]:
     """Extrae nombre cuando la pregunta pide cumpleaños/nacimiento de un paciente."""
@@ -313,6 +327,7 @@ def _extract_birthdate_patient_query(question: str) -> Optional[str]:
 
     return None
 
+
 def _extract_json(text: str) -> Optional[dict]:
     """Extrae el primer JSON válido del texto."""
     m = re.search(
@@ -340,12 +355,15 @@ def _extract_json(text: str) -> Optional[dict]:
 # =========================================================
 # Extractores
 # =========================================================
+
+
 def _is_count_question(question: str) -> bool:
     """True si la pregunta pide una cantidad ("cuántos…", "cantidad de…")."""
     q = _strip_accents_lc(question or "")
     return bool(
         re.search(r"\b(cuant[oa]s?|cantidad|numero de|total de|how many)\b", q)
     )
+
 
 def _birthdate_cutoff(years: int) -> str:
     """Fecha (YYYY-MM-DD) de hace `years` años desde hoy (America/La_Paz).
@@ -361,6 +379,7 @@ def _birthdate_cutoff(years: int) -> str:
     except ValueError:  # 29 de febrero en año no bisiesto
         cutoff = base.replace(year=base.year - years, day=28)
     return cutoff.strftime("%Y-%m-%d")
+
 
 def _extract_age_filters(question: str) -> Optional[List[Dict[str, Any]]]:
     """Traduce condiciones de edad en lenguaje natural a filtros de fecha_nacimiento.
@@ -416,6 +435,7 @@ def _extract_age_filters(question: str) -> Optional[List[Dict[str, Any]]]:
 
     return None
 
+
 def _age_details_from_birthdate(raw: Any) -> Tuple[Optional[int], Optional[int], Optional[str]]:
     if not raw:
         return None, None, None
@@ -432,7 +452,8 @@ def _age_details_from_birthdate(raw: Any) -> Tuple[Optional[int], Optional[int],
     if birth > today:
         return None, None, None
 
-    years = today.year - birth.year - ((today.month, today.day) < (birth.month, birth.day))
+    years = today.year - birth.year - \
+        ((today.month, today.day) < (birth.month, birth.day))
     total_months = (today.year - birth.year) * 12 + (today.month - birth.month)
     if today.day < birth.day:
         total_months -= 1
@@ -445,6 +466,33 @@ def _age_details_from_birthdate(raw: Any) -> Tuple[Optional[int], Optional[int],
 
     year_label = "año" if years == 1 else "años"
     return years, None, f"{years} {year_label}"
+
+
+def _flatten_cita_row(row: Dict[str, Any]) -> Dict[str, Any]:
+    """Sube el paciente embebido de una cita (patient.persona.*) al nivel raíz.
+
+    El LLM compacta las filas a 2 niveles de profundidad, así que sin esto no
+    "ve" patient.persona.sexo (lo recibe como "[obj]") y cree que está oculto.
+    Aplanar deja sexo/nombre/edad visibles y además baja tokens (suelta el
+    objeto patient pesado).
+    """
+    if not isinstance(row, dict):
+        return row
+
+    patient = row.get("patient") if isinstance(row.get("patient"), dict) else {}
+    persona = patient.get("persona") if isinstance(patient.get("persona"), dict) else {}
+
+    out = {k: v for k, v in row.items() if k != "patient"}
+
+    nombre = " ".join(
+        filter(None, [persona.get("nombre"), persona.get("apellidos")])
+    ) or None
+    out["patient_nombre"] = nombre
+    out["patient_sexo"] = persona.get("sexo")
+    _, _, edad_text = _age_details_from_birthdate(persona.get("fecha_nacimiento") or "")
+    out["patient_edad"] = edad_text
+
+    return out
 
 def _flatten_patient_row(row: Dict[str, Any]) -> Dict[str, Any]:
     """
@@ -534,6 +582,7 @@ def _flatten_patient_row(row: Dict[str, Any]) -> Dict[str, Any]:
         "tiene_telefono": tiene_telefono,
     }
 
+
 def _rows_to_excel_b64(
     rows: List[Dict[str, Any]],
     sheet_name: str = "Resultados",
@@ -559,6 +608,7 @@ def _rows_to_excel_b64(
     except Exception:
         return None
 
+
 def _unwrap_rows(payload: Any) -> List[Dict[str, Any]]:
     """Extrae rows de cualquier estructura MCP."""
 
@@ -579,11 +629,14 @@ def _unwrap_rows(payload: Any) -> List[Dict[str, Any]]:
 
     return []
 
+
 def _has_filter_pipeline_args(args: Any) -> bool:
     if not isinstance(args, dict):
         return False
-    keys = ("filters", "search", "sort", "page", "pageSize", "select", "limit", "arrayPath")
+    keys = ("filters", "search", "sort", "page",
+            "pageSize", "select", "limit", "arrayPath")
     return any(k in args and args.get(k) not in (None, {}, [], "") for k in keys)
+
 
 def _ensure_result_limit(
     args: Dict[str, Any],
@@ -599,6 +652,7 @@ def _ensure_result_limit(
     ):
         args["limit"] = default_limit
     return args
+
 
 def _compact_value_for_llm(v: Any, depth: int = 0) -> Any:
     if v is None:
@@ -623,6 +677,7 @@ def _compact_value_for_llm(v: Any, depth: int = 0) -> Any:
         return out
     return str(v)
 
+
 def _compact_rows_for_llm(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     out: List[Dict[str, Any]] = []
     for r in rows:
@@ -631,6 +686,7 @@ def _compact_rows_for_llm(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         else:
             out.append({"value": _compact_value_for_llm(r, 0)})
     return out
+
 
 # Sinónimos de sexo → valor real de la BD (claves sin acento/minúscula).
 _SEXO_SYNONYMS = {
@@ -645,6 +701,7 @@ _SEXO_SYNONYMS = {
     "Otro": ("otro", "otros", "no binario", "nobinario", "indefinido", "sin genero"),
 }
 
+
 def _canonical_sexo(value: Any) -> Any:
     """Mapea sinónimos de sexo al valor real de la BD: Masculino|Femenino|Otro.
 
@@ -658,6 +715,7 @@ def _canonical_sexo(value: Any) -> Any:
         if v == canon.lower() or v in words:
             return canon
     return value
+
 
 def _extract_sexo_exclusions(question: str) -> Optional[List[Dict[str, Any]]]:
     """Para "que no sean A (ni/o) B" sobre sexo → filtros neq determinísticos.
@@ -685,6 +743,7 @@ def _extract_sexo_exclusions(question: str) -> Optional[List[Dict[str, Any]]]:
 
     return [{"field": "persona.sexo", "op": "neq", "value": c} for c in excluded]
 
+
 def _extract_sexo_positive(question: str) -> Optional[str]:
     """Si la pregunta menciona UN solo sexo de forma afirmativa, lo devuelve canónico.
 
@@ -700,6 +759,7 @@ def _extract_sexo_positive(question: str) -> Optional[str]:
             if canon not in found:
                 found.append(canon)
     return found[0] if len(found) == 1 else None
+
 
 def _normalize_tool_args(
     args: Any,
@@ -847,6 +907,7 @@ def _normalize_tool_args(
 
     return normalized
 
+
 def _looks_like_odontograma_query(question: str) -> bool:
     q = _strip_accents_lc(question)
     return any(
@@ -862,6 +923,7 @@ def _looks_like_odontograma_query(question: str) -> bool:
             "canino",
         )
     )
+
 
 def _looks_like_month_or_date_query(question: str) -> bool:
     q = _strip_accents_lc(question)
@@ -888,6 +950,7 @@ def _looks_like_month_or_date_query(question: str) -> bool:
         )
     )
 
+
 def _extract_cita_id_query(question: str) -> Optional[str]:
     q = _strip_accents_lc(question)
     if "cita" not in q:
@@ -905,6 +968,7 @@ def _extract_cita_id_query(question: str) -> Optional[str]:
             return match.group(1)
 
     return None
+
 
 def _diagnose_node_sync(
     cmd: List[str],
@@ -946,6 +1010,8 @@ def _diagnose_node_sync(
 # =========================================================
 # MCP Proxy
 # =========================================================
+
+
 class NodeMCPToolsProxy:
 
     def __init__(self, session: ClientSession):
@@ -1101,6 +1167,8 @@ class NodeMCPToolsProxy:
 # =========================================================
 # Agent
 # =========================================================
+
+
 class MedicalAgentMCP:
 
     def __init__(
@@ -1318,8 +1386,8 @@ class MedicalAgentMCP:
                             )
 
                             full = (
-                                f"{persona.get('nombre','')} "
-                                f"{persona.get('apellidos','')}"
+                                f"{persona.get('nombre', '')} "
+                                f"{persona.get('apellidos', '')}"
                             ).lower()
 
                             if any(
@@ -1386,7 +1454,8 @@ class MedicalAgentMCP:
             args = {
                 "id": cita_id_query,
             }
-            _log(f"[ROUTE] cita lookup routed to cita_by_id id={cita_id_query}")
+            _log(
+                f"[ROUTE] cita lookup routed to cita_by_id id={cita_id_query}")
 
         if _looks_like_odontograma_query(question):
             if tool_name in (
@@ -1483,7 +1552,8 @@ class MedicalAgentMCP:
             sexo_cita = _extract_sexo_positive(question)
             if sexo_cita:
                 cita_extra.append(
-                    {"field": "patient.persona.sexo", "op": "eq", "value": sexo_cita}
+                    {"field": "patient.persona.sexo",
+                        "op": "eq", "value": sexo_cita}
                 )
 
             for f in (_extract_age_filters(question) or []):
@@ -1763,6 +1833,16 @@ Devuelve SOLO JSON válido:
                 for r in rows
             ]
 
+        elif tool_name in (
+            "citas_filter",
+            "citas_list",
+            "citas_by_patient",
+        ):
+            rows = [
+                _flatten_cita_row(r)
+                for r in rows
+            ]
+
         # =====================================================
         # FIX SEGURO / ESTADO CIVIL
         # =====================================================
@@ -1874,6 +1954,11 @@ Devuelve SOLO JSON válido:
             "vacia",
             "sin registros",
             "no se encontr",
+            "no se puede determinar",
+            "no se pueden determinar",
+            "está oculto",
+            "esta oculto",
+            "no se proporciona",
         )
 
         llm_says_empty = any(
@@ -1922,7 +2007,7 @@ Devuelve SOLO JSON válido:
             )
 
         # Pregunta de conteo ("cuántos…") → respondemos el total REAL de forma
-        # determinística, sin depender de que el LLM cuente bien la muestra.
+        # de1terminística, sin depender de que el LLM cuente bien la muestra.
         if _is_count_question(question) and rows and tool_name != "cita_by_id":
 
             noun = _TOOL_NOUN.get(
@@ -1951,7 +2036,8 @@ Devuelve SOLO JSON válido:
                 ).lower()
 
             patient_hint = None
-            patient_hint = context_data.get("patient_name") or context_data.get("patient_id")
+            patient_hint = context_data.get(
+                "patient_name") or context_data.get("patient_id")
 
             if patient_hint:
                 answer = (
@@ -1970,7 +2056,8 @@ Devuelve SOLO JSON válido:
                     context_data = maybe_context
 
             cita_id_value = (
-                (rows[0].get("cita_id") if rows and isinstance(rows[0], dict) else None)
+                (rows[0].get("cita_id") if rows and isinstance(
+                    rows[0], dict) else None)
                 or context_data.get("cita_id")
                 or args.get("id")
             )
@@ -2029,6 +2116,8 @@ Devuelve SOLO JSON válido:
 # =========================================================
 # Bootstrap MCP Node
 # =========================================================
+
+
 async def ask_with_embedded_mcp(
     question: str,
 ) -> Dict[str, Any]:
@@ -2189,6 +2278,8 @@ async def ask_with_embedded_mcp(
 # =========================================================
 # Runner
 # =========================================================
+
+
 class Runner:
 
     def run(

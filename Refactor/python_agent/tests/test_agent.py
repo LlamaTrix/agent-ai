@@ -200,6 +200,23 @@ class TestAgeFilters(unittest.TestCase):
         self.assertEqual(len(fs), 2)
 
 
+class TestFlattenCitaRow(unittest.TestCase):
+    def test_sube_sexo_nombre_al_nivel_raiz(self):
+        cita = {
+            "id": 1, "fecha": "2026-04-02", "estado": "cerrada",
+            "patient": {"id": 9, "persona": {"nombre": "Ana", "apellidos": "Lopez", "sexo": "Femenino"}},
+        }
+        out = ca._flatten_cita_row(cita)
+        self.assertEqual(out["patient_sexo"], "Femenino")
+        self.assertEqual(out["patient_nombre"], "Ana Lopez")
+        self.assertEqual(out["id"], 1)          # conserva campos de la cita
+        self.assertNotIn("patient", out)        # suelta el objeto pesado
+
+    def test_sin_patient_no_rompe(self):
+        out = ca._flatten_cita_row({"id": 1, "fecha": "2026-04-02"})
+        self.assertIsNone(out["patient_sexo"])
+
+
 class TestDescribeExc(unittest.TestCase):
     def test_excepcion_simple(self):
         self.assertEqual(ca._describe_exc(ValueError("boom")), "ValueError: boom")

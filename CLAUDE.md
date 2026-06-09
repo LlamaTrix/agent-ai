@@ -374,6 +374,10 @@ LLM puede ser sobre-escrito** por estas reglas antes de ejecutar la tool.
   En `query()`, para tools de citas, se inyectan filtros sobre `patient.persona.sexo` /
   `patient.persona.fecha_nacimiento` (`_extract_sexo_positive` + `_extract_age_filters`), manteniendo el
   filtro de mes/fecha del LLM. No requiere cruzar tablas: la cita ya trae al paciente embebido.
+  Además `_flatten_cita_row` sube `patient_sexo`/`patient_nombre`/`patient_edad` al nivel raíz: el LLM
+  compacta a 2 niveles y si no, "ve" `patient.persona.sexo` como `"[obj]"` y respondía "el campo sexo
+  está oculto" (aunque el filtro y el Excel estaban bien). El override de "Encontré N" también detecta
+  esas frases de confusión.
 - **Sexo: sinónimos y negaciones.** La BD usa `Masculino|Femenino|Otro`; el LLM fallaba con
   "varón/mujer/niño/niña" (inexistentes → 0) y con negaciones. Dos capas:
   `_canonical_sexo` (en `_normalize_tool_args`, `_SEXO_SYNONYMS`) normaliza el valor de cualquier filtro
