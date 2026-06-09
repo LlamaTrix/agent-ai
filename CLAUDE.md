@@ -372,8 +372,10 @@ LLM puede ser sobre-escrito** por estas reglas antes de ejecutar la tool.
 - **Citas filtradas por atributos del paciente (sexo/edad).** En una cita el paciente viene anidado en
   `patient.persona.*`, pero el LLM filtraba por `sexo`/`persona.sexo` (inexistentes en la cita) → 0.
   En `query()`, para tools de citas, se inyectan filtros sobre `patient.persona.sexo` /
-  `patient.persona.fecha_nacimiento` (`_extract_sexo_positive` + `_extract_age_filters`), manteniendo el
-  filtro de mes/fecha del LLM. No requiere cruzar tablas: la cita ya trae al paciente embebido.
+  `patient.persona.fecha_nacimiento` (`_extract_sexo_positive` + `_extract_age_filters`). El **mes**
+  también es determinístico (`_extract_month_filter` → `fecha contains "YYYY-MM"`): el LLM lo armaba
+  inconsistente (a veces `eq` en vez de `contains` → 0), así que cuando hay nombre de mes se reemplaza su
+  filtro de fecha. No requiere cruzar tablas: la cita ya trae al paciente embebido.
   Además `_flatten_cita_row` sube `patient_sexo`/`patient_nombre`/`patient_edad` al nivel raíz: el LLM
   compacta a 2 niveles y si no, "ve" `patient.persona.sexo` como `"[obj]"` y respondía "el campo sexo
   está oculto" (aunque el filtro y el Excel estaban bien). El override de "Encontré N" también detecta

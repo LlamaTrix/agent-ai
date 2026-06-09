@@ -140,6 +140,21 @@ class TestSexoExclusions(unittest.TestCase):
         self.assertIsNone(ca._extract_sexo_exclusions("pacientes que no tengan telefono"))
 
 
+class TestMonthFilter(unittest.TestCase):
+    def test_mes_usa_contains_y_anio_actual(self):
+        from datetime import datetime
+        f = ca._extract_month_filter("dame citas en el mes de abril")
+        self.assertEqual(f["op"], "contains")
+        self.assertEqual(f["value"], f"{datetime.now().year}-04")
+
+    def test_mes_con_anio_explicito(self):
+        f = ca._extract_month_filter("citas de diciembre 2025")
+        self.assertEqual(f["value"], "2025-12")
+
+    def test_sin_mes_devuelve_none(self):
+        self.assertIsNone(ca._extract_month_filter("dame citas con varones"))
+
+
 class TestSexoPositive(unittest.TestCase):
     def test_un_sexo_afirmativo(self):
         self.assertEqual(ca._extract_sexo_positive("dame citas con varones en abril"), "Masculino")

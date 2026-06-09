@@ -761,6 +761,40 @@ def _extract_sexo_positive(question: str) -> Optional[str]:
     return found[0] if len(found) == 1 else None
 
 
+_MESES = {
+    "enero": 1, "febrero": 2, "marzo": 3, "abril": 4, "mayo": 5, "junio": 6,
+    "julio": 7, "agosto": 8, "septiembre": 9, "setiembre": 9, "octubre": 10,
+    "noviembre": 11, "diciembre": 12,
+}
+
+def _extract_month_filter(question: str, field: str = "fecha") -> Optional[Dict[str, Any]]:
+    """Detecta un mes ("mes de abril", "en abril") → filtro contains "YYYY-MM".
+
+    El LLM arma el filtro de mes de forma inconsistente (a veces eq en vez de
+    contains → 0). Si menciona un año lo usa; si no, el año actual.
+    Devuelve None si no hay nombre de mes.
+    """
+    q = _strip_accents_lc(question or "")
+    mes = None
+    for name, num in _MESES.items():
+        if re.search(rf"\b{name}\b", q):
+            mes = num
+            break
+    if not mes:
+        return None
+
+    ym = re.search(r"\b(20\d{2})\b", q)
+    if ym:
+        year = int(ym.group(1))
+    else:
+        try:
+            year = datetime.now(ZoneInfo("America/La_Paz")).year
+        except Exception:
+            year = datetime.now().year
+
+    return {"field": field, "op": "contains", "value": f"{year}-{mes:02d}"}
+
+
 def _normalize_tool_args(
     args: Any,
     question: str = "",
@@ -1544,8 +1578,8 @@ class MedicalAgentMCP:
                 _log(f"[SEXO] exclusiones inyectadas: {sexo_exclusions}")
 
         # CITAS por atributos del paciente: en una cita el sexo/edad del paciente
-        # viven en patient.persona.* (no en la raíz). El LLM no conoce esa ruta →
-        # los inyectamos nosotros. El filtro de mes/fecha del LLM se mantiene.
+        # viven en patient.persona.* (no en la raíz). El LLM no conoce esa ruta y
+        # arma el mes inconsistente → los inyectamos nosotros de forma determinística.
         if tool_name in ("citas_filter", "citas_list", "citas_by_patient"):
             cita_extra: List[Dict[str, Any]] = []
 
@@ -1561,14 +1595,21 @@ class MedicalAgentMCP:
                     {**f, "field": "patient.persona.fecha_nacimiento"}
                 )
 
+            mes_filter = _extract_month_filter(question, field="fecha")
+            if mes_filter:
+                cita_extra.append(mes_filter)
+
             if cita_extra:
                 if tool_name != "citas_filter" and "citas_filter" in self.tools.allowed_tools:
                     tool_name = "citas_filter"  # citas_list no aplica pipeline
-                _bad = (
+                _bad = {
                     "sexo", "persona.sexo", "patient.persona.sexo",
                     "fecha_nacimiento", "persona.fecha_nacimiento",
                     "patient.persona.fecha_nacimiento", "edad",
-                )
+                }
+                # Si fijamos el mes, reemplazamos el filtro de fecha del LLM.
+                if mes_filter:
+                    _bad |= {"fecha", "hora_inicio", "hora_fin", "created_at", "updated_at"}
                 kept = [
                     f for f in (args.get("filters") or [])
                     if isinstance(f, dict) and f.get("field") not in _bad
