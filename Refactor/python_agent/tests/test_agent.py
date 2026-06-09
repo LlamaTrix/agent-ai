@@ -140,6 +140,20 @@ class TestSexoExclusions(unittest.TestCase):
         self.assertIsNone(ca._extract_sexo_exclusions("pacientes que no tengan telefono"))
 
 
+class TestSexoPositive(unittest.TestCase):
+    def test_un_sexo_afirmativo(self):
+        self.assertEqual(ca._extract_sexo_positive("dame citas con varones en abril"), "Masculino")
+        self.assertEqual(ca._extract_sexo_positive("citas del genero masculino"), "Masculino")
+        self.assertEqual(ca._extract_sexo_positive("citas con mujeres"), "Femenino")
+
+    def test_negacion_no_es_positivo(self):
+        self.assertIsNone(ca._extract_sexo_positive("citas que no sean de varones"))
+
+    def test_sin_sexo_o_ambiguo(self):
+        self.assertIsNone(ca._extract_sexo_positive("dame citas en abril"))
+        self.assertIsNone(ca._extract_sexo_positive("citas de varones y mujeres"))
+
+
 class TestAgeFilters(unittest.TestCase):
     def test_cutoff_resta_anios(self):
         from datetime import datetime

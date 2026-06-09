@@ -685,6 +685,22 @@ def _extract_sexo_exclusions(question: str) -> Optional[List[Dict[str, Any]]]:
 
     return [{"field": "persona.sexo", "op": "neq", "value": c} for c in excluded]
 
+def _extract_sexo_positive(question: str) -> Optional[str]:
+    """Si la pregunta menciona UN solo sexo de forma afirmativa, lo devuelve canónico.
+
+    Para filtrar citas por el sexo del paciente. Devuelve None si es negación,
+    si no hay sexo, o si hay más de uno (ambiguo).
+    """
+    q = _strip_accents_lc(question or "")
+    if re.search(r"\bno\s+s(?:ean|on|ea|e)\b|\bexcepto\b|\bsalvo\b|\bdistint", q):
+        return None
+    found = []
+    for canon, words in _SEXO_SYNONYMS.items():
+        if any(re.search(rf"\b{w}\b", q) for w in words):
+            if canon not in found:
+                found.append(canon)
+    return found[0] if len(found) == 1 else None
+
 def _normalize_tool_args(
     args: Any,
     question: str = "",
@@ -1457,6 +1473,38 @@ class MedicalAgentMCP:
                 ]
                 args["filters"] = existing + sexo_exclusions
                 _log(f"[SEXO] exclusiones inyectadas: {sexo_exclusions}")
+
+        # CITAS por atributos del paciente: en una cita el sexo/edad del paciente
+        # viven en patient.persona.* (no en la raíz). El LLM no conoce esa ruta →
+        # los inyectamos nosotros. El filtro de mes/fecha del LLM se mantiene.
+        if tool_name in ("citas_filter", "citas_list", "citas_by_patient"):
+            cita_extra: List[Dict[str, Any]] = []
+
+            sexo_cita = _extract_sexo_positive(question)
+            if sexo_cita:
+                cita_extra.append(
+                    {"field": "patient.persona.sexo", "op": "eq", "value": sexo_cita}
+                )
+
+            for f in (_extract_age_filters(question) or []):
+                cita_extra.append(
+                    {**f, "field": "patient.persona.fecha_nacimiento"}
+                )
+
+            if cita_extra:
+                if tool_name != "citas_filter" and "citas_filter" in self.tools.allowed_tools:
+                    tool_name = "citas_filter"  # citas_list no aplica pipeline
+                _bad = (
+                    "sexo", "persona.sexo", "patient.persona.sexo",
+                    "fecha_nacimiento", "persona.fecha_nacimiento",
+                    "patient.persona.fecha_nacimiento", "edad",
+                )
+                kept = [
+                    f for f in (args.get("filters") or [])
+                    if isinstance(f, dict) and f.get("field") not in _bad
+                ]
+                args["filters"] = kept + cita_extra
+                _log(f"[CITAS] filtros por paciente inyectados: {cita_extra}")
 
         _log(
             f"[PLAN] tool={tool_name} "

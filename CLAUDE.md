@@ -369,6 +369,11 @@ LLM puede ser sobre-escrito** por estas reglas antes de ejecutar la tool.
 ## 11. Qué mejorar — deuda técnica / limpieza
 
 ### ✅ Ya resuelto (en este pase)
+- **Citas filtradas por atributos del paciente (sexo/edad).** En una cita el paciente viene anidado en
+  `patient.persona.*`, pero el LLM filtraba por `sexo`/`persona.sexo` (inexistentes en la cita) → 0.
+  En `query()`, para tools de citas, se inyectan filtros sobre `patient.persona.sexo` /
+  `patient.persona.fecha_nacimiento` (`_extract_sexo_positive` + `_extract_age_filters`), manteniendo el
+  filtro de mes/fecha del LLM. No requiere cruzar tablas: la cita ya trae al paciente embebido.
 - **Sexo: sinónimos y negaciones.** La BD usa `Masculino|Femenino|Otro`; el LLM fallaba con
   "varón/mujer/niño/niña" (inexistentes → 0) y con negaciones. Dos capas:
   `_canonical_sexo` (en `_normalize_tool_args`, `_SEXO_SYNONYMS`) normaliza el valor de cualquier filtro
