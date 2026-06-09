@@ -140,6 +140,35 @@ class TestSexoExclusions(unittest.TestCase):
         self.assertIsNone(ca._extract_sexo_exclusions("pacientes que no tengan telefono"))
 
 
+class TestMultiFiltro(unittest.TestCase):
+    """Hito: consultas multi-filtro sobre pacientes + citas (cantidades/listas)."""
+
+    def test_citas_sexo_edad_mes_se_combinan(self):
+        q = "dame las citas de varones mayores a 30 años en abril"
+        self.assertEqual(ca._extract_sexo_positive(q), "Masculino")
+        age = ca._extract_age_filters(q)
+        self.assertTrue(age and age[0]["op"] == "lt")
+        mes = ca._extract_month_filter(q, field="fecha")
+        self.assertTrue(mes and mes["op"] == "contains")
+        self.assertTrue(ca._is_list_request(q))
+
+    def test_pacientes_normalize_preserva_filtros_y_canoniza_sexo(self):
+        args = {"filters": [
+            {"field": "persona.sexo", "op": "eq", "value": "varones"},
+            {"field": "persona.estado_civil", "op": "eq", "value": "Soltero"},
+        ]}
+        out = ca._normalize_tool_args(args)
+        self.assertEqual(len(out["filters"]), 2)               # no pierde filtros
+        self.assertEqual(out["filters"][0]["value"], "Masculino")  # canoniza sexo
+        self.assertEqual(out["filters"][1]["value"], "Soltero")    # respeta el resto
+
+    def test_pacientes_conteo_con_edad(self):
+        q = "cuantos pacientes mayores a 65 años hay"
+        self.assertTrue(ca._is_count_question(q))
+        age = ca._extract_age_filters(q)
+        self.assertTrue(age and age[0]["field"] == "persona.fecha_nacimiento")
+
+
 class TestListRequest(unittest.TestCase):
     def test_pide_registros(self):
         self.assertTrue(ca._is_list_request("dame las citas del mes de abril"))
