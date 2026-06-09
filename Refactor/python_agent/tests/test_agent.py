@@ -178,7 +178,7 @@ class TestMultiFiltro(unittest.TestCase):
         age = ca._extract_age_filters(q)
         self.assertTrue(age and age[0]["op"] == "lt")
         mes = ca._extract_month_filter(q, field="fecha")
-        self.assertTrue(mes and mes["op"] == "contains")
+        self.assertTrue(mes and mes[0]["op"] == "contains")
         self.assertTrue(ca._is_list_request(q))
 
     def test_pacientes_normalize_preserva_filtros_y_canoniza_sexo(self):
@@ -215,13 +215,26 @@ class TestListRequest(unittest.TestCase):
 class TestMonthFilter(unittest.TestCase):
     def test_mes_usa_contains_y_anio_actual(self):
         from datetime import datetime
-        f = ca._extract_month_filter("dame citas en el mes de abril")
-        self.assertEqual(f["op"], "contains")
-        self.assertEqual(f["value"], f"{datetime.now().year}-04")
+        fs = ca._extract_month_filter("dame citas en el mes de abril")
+        self.assertEqual(fs, [{"field": "fecha", "op": "contains", "value": f"{datetime.now().year}-04"}])
 
     def test_mes_con_anio_explicito(self):
-        f = ca._extract_month_filter("citas de diciembre 2025")
-        self.assertEqual(f["value"], "2025-12")
+        fs = ca._extract_month_filter("citas de diciembre 2025")
+        self.assertEqual(fs[0]["value"], "2025-12")
+
+    def test_rango_de_dias(self):
+        from datetime import datetime
+        y = datetime.now().year
+        fs = ca._extract_month_filter("cuantas citas de varones entre el 15 y 25 de abril")
+        self.assertEqual(len(fs), 2)
+        self.assertEqual(fs[0], {"field": "fecha", "op": "gte", "value": f"{y}-04-15"})
+        self.assertEqual(fs[1], {"field": "fecha", "op": "lte", "value": f"{y}-04-25T23:59:59"})
+
+    def test_dia_puntual(self):
+        from datetime import datetime
+        y = datetime.now().year
+        fs = ca._extract_month_filter("citas el 15 de abril")
+        self.assertEqual(fs, [{"field": "fecha", "op": "contains", "value": f"{y}-04-15"}])
 
     def test_sin_mes_devuelve_none(self):
         self.assertIsNone(ca._extract_month_filter("dame citas con varones"))

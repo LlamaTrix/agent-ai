@@ -827,18 +827,21 @@ _MESES = {
     "noviembre": 11, "diciembre": 12,
 }
 
-def _extract_month_filter(question: str, field: str = "fecha") -> Optional[Dict[str, Any]]:
-    """Detecta un mes ("mes de abril", "en abril") → filtro contains "YYYY-MM".
+def _extract_month_filter(question: str, field: str = "fecha") -> Optional[List[Dict[str, Any]]]:
+    """Detecta mes (y opcionalmente día puntual o rango de días) → filtro(s) de fecha.
 
-    El LLM arma el filtro de mes de forma inconsistente (a veces eq en vez de
-    contains → 0). Si menciona un año lo usa; si no, el año actual.
-    Devuelve None si no hay nombre de mes.
+    - "en abril"              → contains "YYYY-MM"
+    - "el 15 de abril"        → contains "YYYY-MM-15"
+    - "entre el 15 y 25 de abril" → gte "YYYY-MM-15" + lte "YYYY-MM-25T23:59:59"
+    El LLM arma esto inconsistente (a veces ignora el día, o usa eq → 0).
+    Si menciona un año lo usa; si no, el año actual. None si no hay mes.
     """
     q = _strip_accents_lc(question or "")
     mes = None
+    mname = None
     for name, num in _MESES.items():
         if re.search(rf"\b{name}\b", q):
-            mes = num
+            mes, mname = num, name
             break
     if not mes:
         return None
@@ -852,7 +855,28 @@ def _extract_month_filter(question: str, field: str = "fecha") -> Optional[Dict[
         except Exception:
             year = datetime.now().year
 
-    return {"field": field, "op": "contains", "value": f"{year}-{mes:02d}"}
+    ym_str = f"{year}-{mes:02d}"
+
+    # Rango de días: "entre el 15 y 25 de abril" / "del 15 al 25 de abril".
+    rng = re.search(
+        rf"(\d{{1,2}})\s*(?:y|al|a|-)\s*(?:el\s+)?(\d{{1,2}})\s+de\s+{mname}\b",
+        q,
+    )
+    if rng:
+        d1, d2 = sorted((int(rng.group(1)), int(rng.group(2))))
+        return [
+            {"field": field, "op": "gte", "value": f"{ym_str}-{d1:02d}"},
+            {"field": field, "op": "lte", "value": f"{ym_str}-{d2:02d}T23:59:59"},
+        ]
+
+    # Día puntual: "el 15 de abril" / "abril 15".
+    day = re.search(rf"\bel\s+(\d{{1,2}})\s+de\s+{mname}\b", q) or re.search(
+        rf"\b{mname}\s+(\d{{1,2}})\b", q
+    )
+    if day:
+        return [{"field": field, "op": "contains", "value": f"{ym_str}-{int(day.group(1)):02d}"}]
+
+    return [{"field": field, "op": "contains", "value": ym_str}]
 
 
 def _normalize_tool_args(
@@ -1686,7 +1710,7 @@ class MedicalAgentMCP:
 
             mes_filter = _extract_month_filter(question, field="fecha")
             if mes_filter:
-                cita_extra.append(mes_filter)
+                cita_extra.extend(mes_filter)
 
             if cita_extra:
                 if tool_name != "citas_filter" and "citas_filter" in self.tools.allowed_tools:
