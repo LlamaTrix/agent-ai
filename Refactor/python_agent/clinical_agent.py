@@ -948,6 +948,52 @@ def _extract_month_filter(question: str, field: str = "fecha") -> Optional[List[
     return [{"field": field, "op": "contains", "value": ym_str}]
 
 
+def _extract_relative_date_filter(question: str, field: str = "fecha") -> Optional[List[Dict[str, Any]]]:
+    """Fechas relativas → filtro(s) sobre `fecha`.
+
+    "hoy"/"mañana"/"ayer" → contains "YYYY-MM-DD"; "esta semana"/"semana que
+    viene" → rango lun-dom; "este mes" → contains "YYYY-MM". None si no hay.
+    El LLM no las calcula bien y con citas_by_patient ni se aplicaban.
+    """
+    from datetime import timedelta
+
+    q = _strip_accents_lc(question or "")
+    try:
+        today = datetime.now(ZoneInfo("America/La_Paz")).date()
+    except Exception:
+        today = datetime.now().date()
+
+    def _day(d):
+        return [{"field": field, "op": "contains", "value": d.strftime("%Y-%m-%d")}]
+
+    def _range(d1, d2):
+        return [
+            {"field": field, "op": "gte", "value": d1.strftime("%Y-%m-%d")},
+            {"field": field, "op": "lte", "value": d2.strftime("%Y-%m-%d") + "T23:59:59"},
+        ]
+
+    if re.search(r"\bhoy\b", q):
+        return _day(today)
+    if re.search(r"\bmanana\b", q):
+        return _day(today + timedelta(days=1))
+    if re.search(r"\bayer\b", q):
+        return _day(today - timedelta(days=1))
+
+    monday = today - timedelta(days=today.weekday())
+    if re.search(r"\b(esta\s+semana|semana\s+actual)\b", q):
+        return _range(monday, monday + timedelta(days=6))
+    if re.search(r"\bsemana\s+(?:que\s+viene|proxima|siguiente|entrante)\b", q):
+        nxt = monday + timedelta(days=7)
+        return _range(nxt, nxt + timedelta(days=6))
+    if re.search(r"\bsemana\s+(?:pasada|anterior)\b", q):
+        prev = monday - timedelta(days=7)
+        return _range(prev, prev + timedelta(days=6))
+    if re.search(r"\b(este\s+mes|mes\s+actual)\b", q):
+        return [{"field": field, "op": "contains", "value": today.strftime("%Y-%m")}]
+
+    return None
+
+
 def _normalize_tool_args(
     args: Any,
     question: str = "",
@@ -1798,20 +1844,28 @@ class MedicalAgentMCP:
                     {**f, "field": "patient.persona.fecha_nacimiento"}
                 )
 
-            mes_filter = _extract_month_filter(question, field="fecha")
-            if mes_filter:
-                cita_extra.extend(mes_filter)
+            # Fecha: mes/día/rango ("abril", "15 al 25 de abril") o relativa
+            # ("esta semana", "hoy", "este mes"). El LLM no la arma bien y, con
+            # citas_by_patient (sin pipeline), ni siquiera se aplicaba.
+            date_filters = (
+                _extract_month_filter(question, field="fecha")
+                or _extract_relative_date_filter(question, field="fecha")
+            )
+            if date_filters:
+                cita_extra.extend(date_filters)
 
             if cita_extra:
                 if tool_name != "citas_filter" and "citas_filter" in self.tools.allowed_tools:
-                    tool_name = "citas_filter"  # citas_list no aplica pipeline
+                    # citas_list/citas_by_patient no aplican pipeline; citas_filter
+                    # sí (y respeta patient_id si está) → así el filtro de fecha vale.
+                    tool_name = "citas_filter"
                 _bad = {
                     "sexo", "persona.sexo", "patient.persona.sexo",
                     "fecha_nacimiento", "persona.fecha_nacimiento",
                     "patient.persona.fecha_nacimiento", "edad",
                 }
-                # Si fijamos el mes, reemplazamos el filtro de fecha del LLM.
-                if mes_filter:
+                # Si fijamos la fecha, reemplazamos el filtro de fecha del LLM.
+                if date_filters:
                     _bad |= {"fecha", "hora_inicio", "hora_fin", "created_at", "updated_at"}
                 kept = [
                     f for f in (args.get("filters") or [])

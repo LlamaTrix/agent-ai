@@ -288,6 +288,31 @@ class TestMonthFilter(unittest.TestCase):
         self.assertIsNone(ca._extract_month_filter("dame citas con varones"))
 
 
+class TestRelativeDate(unittest.TestCase):
+    def test_esta_semana_es_rango_lun_dom(self):
+        from datetime import datetime, timedelta
+        fs = ca._extract_relative_date_filter("dame las citas de esta semana")
+        self.assertEqual(len(fs), 2)
+        self.assertEqual(fs[0]["op"], "gte")
+        self.assertEqual(fs[1]["op"], "lte")
+        hoy = datetime.now().date()
+        lunes = hoy - timedelta(days=hoy.weekday())
+        self.assertEqual(fs[0]["value"], lunes.strftime("%Y-%m-%d"))
+
+    def test_hoy_es_contains_del_dia(self):
+        from datetime import datetime
+        fs = ca._extract_relative_date_filter("citas de hoy")
+        self.assertEqual(fs, [{"field": "fecha", "op": "contains", "value": datetime.now().strftime("%Y-%m-%d")}])
+
+    def test_este_mes(self):
+        from datetime import datetime
+        fs = ca._extract_relative_date_filter("citas de este mes")
+        self.assertEqual(fs[0]["value"], datetime.now().strftime("%Y-%m"))
+
+    def test_sin_fecha_relativa(self):
+        self.assertIsNone(ca._extract_relative_date_filter("dame las citas de varones"))
+
+
 class TestSexoPositive(unittest.TestCase):
     def test_un_sexo_afirmativo(self):
         self.assertEqual(ca._extract_sexo_positive("dame citas con varones en abril"), "Masculino")
