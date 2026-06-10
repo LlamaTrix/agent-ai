@@ -140,6 +140,24 @@ class TestSexoExclusions(unittest.TestCase):
         self.assertIsNone(ca._extract_sexo_exclusions("pacientes que no tengan telefono"))
 
 
+class TestPatientNameLookup(unittest.TestCase):
+    def test_apellido_solo(self):
+        self.assertEqual(ca._extract_patient_name_lookup("quiero los datos del paciente olaechea"), "olaechea")
+
+    def test_con_apellido_explicito(self):
+        self.assertEqual(ca._extract_patient_name_lookup("dame los datos del paciente con apellido olaechea"), "olaechea")
+
+    def test_nombre_y_apellido_usa_ultimo_token(self):
+        self.assertEqual(ca._extract_patient_name_lookup("datos del paciente hernan olaechea"), "olaechea")
+
+    def test_no_aplica_a_citas(self):
+        self.assertIsNone(ca._extract_patient_name_lookup("dame las citas del paciente olaechea"))
+
+    def test_no_captura_palabras_de_filtro(self):
+        self.assertIsNone(ca._extract_patient_name_lookup("dame los pacientes masculinos"))
+        self.assertIsNone(ca._extract_patient_name_lookup("pacientes solteros"))
+
+
 class TestPresenceFilters(unittest.TestCase):
     def test_sin_seguro(self):
         fs = ca._extract_presence_filters("cuantos pacientes masculinos sin seguro")

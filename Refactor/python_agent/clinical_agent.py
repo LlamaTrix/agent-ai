@@ -328,6 +328,40 @@ def _extract_birthdate_patient_query(question: str) -> Optional[str]:
     return None
 
 
+_PATIENT_LOOKUP_RE = re.compile(
+    r"\bpacientes?\s+"
+    r"(?:llamad[oa]s?\s+|de\s+nombre\s+|de\s+apellidos?\s+|con\s+apellidos?\s+|con\s+nombre\s+)?"
+    r"([a-záéíóúüñ]+(?:\s+[a-záéíóúüñ]+)?)\s*\??$"
+)
+_PATIENT_LOOKUP_STOP = {
+    "masculino", "masculinos", "femenino", "femeninos", "femenina", "femeninas",
+    "activo", "activos", "inactivo", "inactivos", "soltero", "solteros",
+    "casado", "casados", "registrado", "registrados", "nuevo", "nuevos",
+    "hombre", "hombres", "mujer", "mujeres", "varon", "varones", "que tengo",
+}
+
+def _extract_patient_name_lookup(question: str) -> Optional[str]:
+    """Detecta "datos del paciente <nombre/apellido>" → token a buscar.
+
+    El usuario no sabe si lo que da es nombre o apellido; buscamos en ambos.
+    None si es sobre otra entidad (citas/pagos/...) o si no es una búsqueda por nombre.
+    """
+    q = _strip_accents_lc(question or "")
+    if re.search(r"\b(cita|citas|pago|pagos|visita|visitas|odontograma|antecedente|receta|estudio)", q):
+        return None
+
+    m = _PATIENT_LOOKUP_RE.search(q)
+    if not m:
+        return None
+
+    name = m.group(1).strip()
+    if name in _PATIENT_LOOKUP_STOP or len(name) < 3:
+        return None
+
+    # Búsqueda por el último token (suele ser el apellido, el más distintivo).
+    return name.split()[-1]
+
+
 def _extract_json(text: str) -> Optional[dict]:
     """Extrae el primer JSON válido del texto."""
     m = re.search(
@@ -1622,6 +1656,19 @@ class MedicalAgentMCP:
                 f"[ROUTE] birthdate lookup "
                 f"name='{birthdate_name}'"
             )
+
+        # "datos del paciente <X>": X puede ser nombre o apellido → buscar en ambos.
+        patient_lookup = _extract_patient_name_lookup(question)
+        if patient_lookup and not birthdate_name:
+            tool_name = "patient_filter"
+            args = {
+                "search": {
+                    "text": patient_lookup,
+                    "fields": ["persona.nombre", "persona.apellidos"],
+                },
+                "limit": 50,
+            }
+            _log(f"[ROUTE] patient lookup por nombre/apellido='{patient_lookup}'")
 
         # Si el planner eligió un "list/get" pero incluyó filtros/paginación,
         # preferimos el tool *_filter (determinístico) para que el filtro sí se aplique.
