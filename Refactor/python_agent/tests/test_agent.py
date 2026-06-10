@@ -158,6 +158,36 @@ class TestPatientNameLookup(unittest.TestCase):
         self.assertIsNone(ca._extract_patient_name_lookup("pacientes solteros"))
 
 
+class TestBroadenNameFilter(unittest.TestCase):
+    def test_nombre_pasa_a_search_ambos_campos(self):
+        out = ca._broaden_name_filter({"filters": [{"field": "persona.nombre", "op": "contains", "value": "olaechea"}]})
+        self.assertEqual(out["search"]["fields"], ["persona.nombre", "persona.apellidos"])
+        self.assertEqual(out["search"]["text"], "olaechea")
+        self.assertEqual(out["filters"], [])
+
+    def test_conserva_otros_filtros(self):
+        out = ca._broaden_name_filter({"filters": [
+            {"field": "persona.sexo", "op": "eq", "value": "Masculino"},
+            {"field": "persona.nombre", "op": "contains", "value": "juan"},
+        ]})
+        self.assertEqual(out["search"]["text"], "juan")
+        self.assertEqual(out["filters"], [{"field": "persona.sexo", "op": "eq", "value": "Masculino"}])
+
+    def test_no_toca_startswith(self):
+        args = {"filters": [{"field": "persona.nombre", "op": "startsWith", "value": "M"}]}
+        out = ca._broaden_name_filter(args)
+        self.assertNotIn("search", out)
+        self.assertEqual(out["filters"][0]["op"], "startsWith")
+
+    def test_respeta_apellido_explicito(self):
+        args = {"filters": [
+            {"field": "persona.nombre", "op": "contains", "value": "juan"},
+            {"field": "persona.apellidos", "op": "contains", "value": "perez"},
+        ]}
+        out = ca._broaden_name_filter(args)
+        self.assertNotIn("search", out)  # si hay apellido explícito, no toca
+
+
 class TestPresenceFilters(unittest.TestCase):
     def test_sin_seguro(self):
         fs = ca._extract_presence_filters("cuantos pacientes masculinos sin seguro")

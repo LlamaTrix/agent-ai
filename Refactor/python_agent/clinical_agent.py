@@ -362,6 +362,41 @@ def _extract_patient_name_lookup(question: str) -> Optional[str]:
     return name.split()[-1]
 
 
+def _broaden_name_filter(args: Dict[str, Any]) -> Dict[str, Any]:
+    """Un filtro de nombre (contains/eq) → search en nombre+apellidos.
+
+    El usuario puede dar el apellido, pero el LLM lo filtra como persona.nombre.
+    No toca: startsWith ("empieza con M"), ni si ya hay filtro de apellido o un
+    search. Convierte el primer filtro de nombre y conserva los demás filtros.
+    """
+    if not isinstance(args, dict):
+        return args
+
+    filters = args.get("filters") or []
+    tiene_apellido = any(
+        isinstance(f, dict) and f.get("field") in ("persona.apellidos", "apellidos")
+        for f in filters
+    )
+    if tiene_apellido or args.get("search"):
+        return args
+
+    for f in filters:
+        if (
+            isinstance(f, dict)
+            and f.get("field") in ("persona.nombre", "nombre")
+            and f.get("op") in ("contains", "eq")
+            and isinstance(f.get("value"), str)
+        ):
+            args["search"] = {
+                "text": f["value"],
+                "fields": ["persona.nombre", "persona.apellidos"],
+            }
+            args["filters"] = [x for x in filters if x is not f]
+            break
+
+    return args
+
+
 def _extract_json(text: str) -> Optional[dict]:
     """Extrae el primer JSON válido del texto."""
     m = re.search(
@@ -1718,6 +1753,14 @@ class MedicalAgentMCP:
                 ]
                 args["filters"] = kept + presence_filters
                 _log(f"[PRESENCE] filtros inyectados: {presence_filters}")
+
+        # NOMBRE → buscar en nombre Y apellido (el usuario puede dar el apellido
+        # pero el LLM lo filtra como nombre). Ver _broaden_name_filter.
+        if tool_name in ("patient_filter", "person_filter"):
+            before = args.get("search")
+            args = _broaden_name_filter(args)
+            if args.get("search") and args.get("search") is not before:
+                _log(f"[NAME] nombre→search en nombre+apellidos: {args['search']['text']}")
 
         # SEXO (negación): "que no sean varones ni mujeres" → neq determinísticos,
         # sin depender de que el LLM mapee sinónimos ni arme bien la negación.

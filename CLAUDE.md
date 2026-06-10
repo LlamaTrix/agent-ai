@@ -229,15 +229,28 @@ npm start          # (en mcp_server) correr el MCP standalone vía stdio — sol
 npx tsc --noEmit   # (en mcp_server) type-check sin compilar
 ```
 
-### Producción (Linux + pm2)
+### Producción (Linux + pm2) — `agente-ai@vmi3178413:~/agent-ai`
+⚠️ **Gotcha real del servidor (junio 2026):** el server tiene **estructura DUPLICADA**:
+`~/agent-ai/python_agent` + `~/agent-ai/mcp_server` (código **VIEJO**, flat) **y** `~/agent-ai/Refactor/...`
+(código **NUEVO**). pm2 debe correr desde `Refactor/`. Verificar con:
 ```bash
-cd Refactor
-pm2 start ecosystem.config.cjs       # agent-api (:8001) + agent-ui (:8501)
-pm2 logs agent-api
+pm2 describe agent-api | grep -iE "exec cwd"   # debe decir .../Refactor/python_agent
 ```
+Deploy de cambios nuevos (rama `mejoras-hans`):
+```bash
+cd ~/agent-ai && git fetch origin && git checkout mejoras-hans && git pull
+# si tocaste mcp_server/src/**: (cd Refactor/mcp_server && npm install && npm run build)
+pm2 restart all
+```
+Si pm2 estuviera apuntando al viejo, reapuntarlo:
+```bash
+pm2 delete all && cd ~/agent-ai/Refactor && pm2 start ecosystem.config.cjs && pm2 save
+```
+El `.env` de prod vive en `Refactor/python_agent/.env`, usa `LLAMA_*` para el LLM, y `NODE_MCP_ENTRY`
+debe apuntar a `~/agent-ai/Refactor/mcp_server/dist/main.js`. **Deuda:** consolidar y borrar lo viejo (§11.1).
 
 > **Recordá:** tras cualquier cambio en `mcp_server/src/**` hay que recompilar (`npm run build`),
-> porque el agente Python ejecuta `dist/main.js`, no los `.ts`.
+> porque el agente Python ejecuta `dist/main.js`, no los `.ts`. (Los cambios solo-Python no necesitan rebuild.)
 
 ---
 
@@ -335,6 +348,42 @@ Nuevo archivo en `src/tools/` con su `register...` + alta en `index.ts`. Modelo 
 
 Filosofía del repo (ver `GUIA_AGREGAR_TOOLS.md`): **tool-first y determinístico** — la tool debe
 funcionar aunque el LLM falle; el LLM es solo la capa de UX en lenguaje natural.
+
+---
+
+## 8.5. Capa determinística NL→filtros (lo que de verdad hace funcionar las consultas)
+
+El LLM es **poco confiable** para: contar, calcular fechas/edades, mapear sinónimos a valores exactos
+de la BD, y armar negaciones. Por eso `query()` tiene una **familia de extractores determinísticos** que
+detectan la intención por regex e **inyectan/corrigen los filtros** antes de llamar a la tool (y corrigen
+la respuesta después). Patrón: el LLM elige la tool y da contexto; **el código arma los filtros exactos**.
+
+| Helper | Qué resuelve |
+|---|---|
+| `_is_count_question` / `_is_list_request` | "cuántos…/dame…/lista…" → responde el **total real** (`Hay N` / `Encontré N`), no lo que cuente el LLM |
+| `_ensure_result_limit` | inyecta `limit` alto si no hay paginación → no trunca a 50 (conteos/listas/Excel completos) |
+| `_canonical_sexo` (+`_SEXO_SYNONYMS`) | varón/mujer/niño/… → `Masculino|Femenino|Otro` (en `_normalize_tool_args`) |
+| `_extract_sexo_exclusions` | "que no sean A ni/o B" → filtros `neq` (negación determinística) |
+| `_extract_sexo_positive` | un sexo afirmativo → para filtrar **citas** por `patient.persona.sexo` |
+| `_canonical_estado_civil` | "soltero" → `"Soltero/a"` (la BD usa formato con barra) |
+| `_extract_presence_filters` | "sin/con seguro", "sin/con teléfono" → `__has_seguro` / `__has_phone` |
+| `_extract_age_filters` (+`_birthdate_cutoff`) | "mayores/menores/entre/con N años" → corte sobre `fecha_nacimiento` |
+| `_extract_month_filter` | mes / día puntual / **rango de días** ("entre el 15 y 25 de abril") → `fecha` |
+| `_extract_patient_name_lookup` | "datos del paciente \<X\>" → `search` en **nombre Y apellido** (X puede ser cualquiera) |
+| `_flatten_cita_row` | sube `patient_sexo/nombre/edad` al nivel raíz (el LLM compacta a 2 niveles y no "ve" `patient.persona.*`) |
+| `_describe_exc` | desenrolla el `ExceptionGroup` de anyio → muestra el error real (ej. 429 de Groq) en vez de "TaskGroup" |
+
+**Para CITAS** el sexo/edad/seguro del paciente viven en `patient.persona.*` (la cita trae al paciente
+embebido) — por eso hay inyección específica en el bloque de citas de `query()`. No hace falta cruzar tablas.
+
+> Al sumar una intención nueva: **hacela determinística acá** (no confíes en el prompt) y agregá su test
+> en `tests/test_agent.py`. Es el patrón que mantiene el hito pacientes+citas confiable.
+
+### Realidad de los datos de prueba (local) — para certificar sin sustos
+La BD de prueba local es **muy homogénea**: todos los pacientes activos y **menores de 30**, sin tipo de
+sangre, estado civil solo `Soltero/a`; todas las citas `cerrada`/`en curso` y `Consulta`. Por eso muchas
+consultas dan **0 con razón** (no es bug). **Producción usa OTRA base** (`api-agente-ai.rocazit.com`), así
+que los números no coinciden con local — certificar la **lógica** en local y la **consistencia** en prod.
 
 ---
 
