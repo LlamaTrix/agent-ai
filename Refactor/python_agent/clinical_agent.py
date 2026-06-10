@@ -555,6 +555,46 @@ def _age_details_from_birthdate(raw: Any) -> Tuple[Optional[int], Optional[int],
     return years, None, f"{years} {year_label}"
 
 
+def _single_row_text(tool_name: str, row: Dict[str, Any]) -> Optional[str]:
+    """Arma una respuesta en texto plano con los campos de una sola fila.
+
+    Para citas: fecha, tipo, estado, motivo, paciente.
+    Para pacientes: nombre, CI, sexo, edad, teléfono, seguro, estado civil.
+    """
+    if not isinstance(row, dict):
+        return None
+
+    def _fecha(v):
+        return str(v)[:10] if v else None
+
+    if tool_name.startswith("citas"):
+        campos = [
+            ("Fecha", _fecha(row.get("fecha") or row.get("hora_inicio"))),
+            ("Tipo", row.get("tipo_evento")),
+            ("Estado", row.get("estado")),
+            ("Motivo", row.get("motivo")),
+            ("Paciente", row.get("patient_nombre")),
+        ]
+        encabezado = "Cita"
+    else:  # pacientes
+        edad = row.get("edad_texto") or row.get("edad")
+        seguro = row.get("empresa_seg") or ("con seguro" if row.get("tiene_seguro") else "sin seguro")
+        campos = [
+            ("CI", row.get("ci")),
+            ("Sexo", row.get("sexo")),
+            ("Edad", edad),
+            ("Teléfono", row.get("telefono")),
+            ("Seguro", seguro),
+            ("Estado civil", row.get("estado_civil")),
+        ]
+        encabezado = row.get("nombre") or "Paciente"
+
+    detalle = " · ".join(f"{k}: {v}" for k, v in campos if v not in (None, "", "None"))
+    if not detalle:
+        return None
+    return f"{encabezado} — {detalle}."
+
+
 def _flatten_cita_row(row: Dict[str, Any]) -> Dict[str, Any]:
     """Sube el paciente embebido de una cita (patient.persona.*) al nivel raíz.
 
@@ -2383,6 +2423,23 @@ Devuelve SOLO JSON válido:
                 answer = f"Encontré la cita {cita_id_value}."
             else:
                 answer = f"No se encontró una cita con el ID {cita_id_value}."
+
+        # =====================================================
+        # 1 SOLA FILA → texto plano (sin tabla ni Excel)
+        # =====================================================
+        if (
+            len(rows) == 1
+            and not _is_count_question(question)
+            and tool_name in (
+                "patient_filter", "patient_list", "patient_get",
+                "citas_filter", "citas_list", "citas_by_patient",
+            )
+        ):
+            texto = _single_row_text(tool_name, rows[0])
+            if texto:
+                answer = texto
+                rows = []  # no tabla ni Excel; los datos van en el texto
+                _log("[SINGLE] 1 fila → respuesta en texto plano")
 
         # =====================================================
         # PASO 5 — EXCEL

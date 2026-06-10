@@ -373,6 +373,30 @@ class TestAgeFilters(unittest.TestCase):
         self.assertEqual(len(fs), 2)
 
 
+class TestSingleRowText(unittest.TestCase):
+    def test_cita_en_texto(self):
+        row = {"fecha": "2026-04-10T18:09:00", "tipo_evento": "Consulta", "estado": "cerrada",
+               "motivo": "control", "patient_nombre": "Hernan Olaechea"}
+        txt = ca._single_row_text("citas_filter", row)
+        self.assertIn("Fecha: 2026-04-10", txt)
+        self.assertIn("Tipo: Consulta", txt)
+        self.assertIn("Paciente: Hernan Olaechea", txt)
+        self.assertNotIn("18:09", txt)  # solo la fecha, sin hora
+
+    def test_paciente_en_texto(self):
+        row = {"nombre": "Hernan Olaechea", "ci": "234234", "sexo": "Masculino",
+               "edad_texto": "30 años", "telefono": None, "empresa_seg": "ALIANZA"}
+        txt = ca._single_row_text("patient_filter", row)
+        self.assertTrue(txt.startswith("Hernan Olaechea —"))
+        self.assertIn("CI: 234234", txt)
+        self.assertIn("Seguro: ALIANZA", txt)
+        self.assertNotIn("Teléfono", txt)  # omite campos vacíos
+
+    def test_paciente_sin_seguro(self):
+        txt = ca._single_row_text("patient_filter", {"nombre": "Ana", "ci": "1", "tiene_seguro": False})
+        self.assertIn("Seguro: sin seguro", txt)
+
+
 class TestFlattenCitaRow(unittest.TestCase):
     def test_sube_sexo_nombre_al_nivel_raiz(self):
         cita = {
