@@ -331,35 +331,43 @@ def _extract_birthdate_patient_query(question: str) -> Optional[str]:
 _PATIENT_LOOKUP_RE = re.compile(
     r"\bpacientes?\s+"
     r"(?:llamad[oa]s?\s+|de\s+nombre\s+|de\s+apellidos?\s+|con\s+apellidos?\s+|con\s+nombre\s+)?"
-    r"([a-záéíóúüñ]+(?:\s+[a-záéíóúüñ]+)?)\s*\??$"
+    r"([a-záéíóúüñ]+(?:\s+[a-záéíóúüñ]+)*)\s*\??$"
 )
+# Si CUALQUIER token capturado es una de estas palabras, no es una búsqueda por nombre.
 _PATIENT_LOOKUP_STOP = {
     "masculino", "masculinos", "femenino", "femeninos", "femenina", "femeninas",
     "activo", "activos", "inactivo", "inactivos", "soltero", "solteros",
     "casado", "casados", "registrado", "registrados", "nuevo", "nuevos",
-    "hombre", "hombres", "mujer", "mujeres", "varon", "varones", "que tengo",
+    "hombre", "hombres", "mujer", "mujeres", "varon", "varones", "que", "tengo",
+    "con", "sin", "seguro", "telefono", "celular", "tiene", "tienen", "tengan",
+    "numero", "edad", "ano", "anos",
 }
 
 def _extract_patient_name_lookup(question: str) -> Optional[str]:
-    """Detecta "datos del paciente <nombre/apellido>" → token a buscar.
+    """Detecta "datos del paciente <nombre completo>" → nombre a buscar (con ñ/acentos).
 
-    El usuario no sabe si lo que da es nombre o apellido; buscamos en ambos.
-    None si es sobre otra entidad (citas/pagos/...) o si no es una búsqueda por nombre.
+    Devuelve el nombre tal cual lo dio el usuario (puede ser nombre, apellido, o
+    nombre+apellidos). None si es sobre otra entidad o si parece un filtro.
     """
-    q = _strip_accents_lc(question or "")
-    if re.search(r"\b(cita|citas|pago|pagos|visita|visitas|odontograma|antecedente|receta|estudio)", q):
+    if re.search(
+        r"\b(cita|citas|pago|pagos|visita|visitas|odontograma|antecedente|receta|estudio)",
+        _strip_accents_lc(question or ""),
+    ):
         return None
 
-    m = _PATIENT_LOOKUP_RE.search(q)
+    # Extraemos sobre el original (en minúscula) para conservar ñ/acentos.
+    m = _PATIENT_LOOKUP_RE.search((question or "").lower())
     if not m:
         return None
 
     name = m.group(1).strip()
-    if name in _PATIENT_LOOKUP_STOP or len(name) < 3:
+    tokens = name.split()
+    if any(_strip_accents_lc(t) in _PATIENT_LOOKUP_STOP for t in tokens):
+        return None
+    if len(_strip_accents_lc(name).replace(" ", "")) < 3:
         return None
 
-    # Búsqueda por el último token (suele ser el apellido, el más distintivo).
-    return name.split()[-1]
+    return name
 
 
 def _broaden_name_filter(args: Dict[str, Any]) -> Dict[str, Any]:
@@ -1791,17 +1799,26 @@ class MedicalAgentMCP:
             )
 
         # "datos del paciente <X>": X puede ser nombre o apellido → buscar en ambos.
+        name_lookup_tokens: Optional[List[str]] = None
         patient_lookup = _extract_patient_name_lookup(question)
         if patient_lookup and not birthdate_name:
             tool_name = "patient_filter"
+            partes = patient_lookup.split()
+            # Buscamos candidatos por el token más largo (más distintivo, conserva ñ),
+            # y luego exigimos que estén TODOS los tokens (post-filtro, sin acentos).
+            token_busqueda = max(partes, key=len)
             args = {
                 "search": {
-                    "text": patient_lookup,
+                    "text": token_busqueda,
                     "fields": ["persona.nombre", "persona.apellidos"],
                 },
-                "limit": 50,
+                "limit": 500,
             }
-            _log(f"[ROUTE] patient lookup por nombre/apellido='{patient_lookup}'")
+            name_lookup_tokens = [
+                _strip_accents_lc(t) for t in partes
+                if len(_strip_accents_lc(t)) >= 2
+            ]
+            _log(f"[ROUTE] patient lookup nombre='{patient_lookup}' tokens={name_lookup_tokens}")
 
         # Si el planner eligió un "list/get" pero incluyó filtros/paginación,
         # preferimos el tool *_filter (determinístico) para que el filtro sí se aplique.
@@ -2182,6 +2199,19 @@ Devuelve SOLO JSON válido:
                 _flatten_patient_row(r)
                 for r in rows
             ]
+
+            # Búsqueda por nombre: exigir que TODOS los tokens estén en el nombre
+            # completo (sin acentos/ñ) → "Javier Soliz" no trae a todos los Soliz,
+            # y "Javier Soliz Añez" matchea aunque la BD tenga la ñ.
+            if name_lookup_tokens:
+                rows = [
+                    r for r in rows
+                    if all(
+                        tok in _strip_accents_lc(str(r.get("nombre") or ""))
+                        for tok in name_lookup_tokens
+                    )
+                ]
+                mcp_total = len(rows)  # el total del MCP era de candidatos, no del filtrado
 
         elif tool_name in (
             "citas_filter",

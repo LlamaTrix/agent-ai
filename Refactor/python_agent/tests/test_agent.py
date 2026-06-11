@@ -147,8 +147,12 @@ class TestPatientNameLookup(unittest.TestCase):
     def test_con_apellido_explicito(self):
         self.assertEqual(ca._extract_patient_name_lookup("dame los datos del paciente con apellido olaechea"), "olaechea")
 
-    def test_nombre_y_apellido_usa_ultimo_token(self):
-        self.assertEqual(ca._extract_patient_name_lookup("datos del paciente hernan olaechea"), "olaechea")
+    def test_nombre_completo(self):
+        self.assertEqual(ca._extract_patient_name_lookup("datos del paciente hernan olaechea"), "hernan olaechea")
+
+    def test_tres_tokens_con_enie(self):
+        # conserva la ñ y captura los 3 tokens
+        self.assertEqual(ca._extract_patient_name_lookup("dame los datos del paciente Javier Soliz Añez").lower(), "javier soliz añez")
 
     def test_no_aplica_a_citas(self):
         self.assertIsNone(ca._extract_patient_name_lookup("dame las citas del paciente olaechea"))
@@ -156,6 +160,7 @@ class TestPatientNameLookup(unittest.TestCase):
     def test_no_captura_palabras_de_filtro(self):
         self.assertIsNone(ca._extract_patient_name_lookup("dame los pacientes masculinos"))
         self.assertIsNone(ca._extract_patient_name_lookup("pacientes solteros"))
+        self.assertIsNone(ca._extract_patient_name_lookup("pacientes con seguro alianza"))
 
 
 class TestBroadenNameFilter(unittest.TestCase):
