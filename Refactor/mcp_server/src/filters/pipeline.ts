@@ -2,7 +2,9 @@ export type FilterSpec = { field: string; op: string; value?: any };
 
 const INTERNAL_FIELDS = new Set([
   "created_at", "updated_at", "deleted_at",
-  "num_seguro", "empresa_seg", "ref_medica",
+  // num_seguro / empresa_seg NO se ocultan: el agente los usa para reportes de
+  // seguro y para mostrar la aseguradora. (Antes se borraban → "sin seguro" en todo.)
+  "ref_medica",
   "pivot",
   "__has_phone",
   "__has_seguro",

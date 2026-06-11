@@ -355,6 +355,10 @@ def _extract_patient_name_lookup(question: str) -> Optional[str]:
     ):
         return None
 
+    # Un reporte ("por sexo", "resumen"…) no es una búsqueda por nombre.
+    if _extract_report_spec(question):
+        return None
+
     # Extraemos sobre el original (en minúscula) para conservar ñ/acentos.
     m = _PATIENT_LOOKUP_RE.search((question or "").lower())
     if not m:
