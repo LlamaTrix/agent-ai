@@ -452,6 +452,18 @@ def _is_list_request(question: str) -> bool:
     )
 
 
+def _wants_excel(question: str) -> bool:
+    """True si el usuario pide explícitamente el Excel / descarga / exportación."""
+    q = _strip_accents_lc(question or "")
+    return bool(
+        re.search(
+            r"\b(excel|xlsx|descarga[r]?|exporta[r]?|planilla|"
+            r"hoja de calculo|spreadsheet)\b",
+            q,
+        )
+    )
+
+
 def _birthdate_cutoff(years: int) -> str:
     """Fecha (YYYY-MM-DD) de hace `years` años desde hoy (America/La_Paz).
 
@@ -2426,10 +2438,12 @@ Devuelve SOLO JSON válido:
 
         # =====================================================
         # 1 SOLA FILA → texto plano (sin tabla ni Excel)
+        # No aplica si el usuario pidió el Excel (ahí quiere los datos/tabla).
         # =====================================================
         if (
             len(rows) == 1
             and not _is_count_question(question)
+            and not _wants_excel(question)
             and tool_name in (
                 "patient_filter", "patient_list", "patient_get",
                 "citas_filter", "citas_list", "citas_by_patient",
@@ -2442,7 +2456,7 @@ Devuelve SOLO JSON válido:
                 _log("[SINGLE] 1 fila → respuesta en texto plano")
 
         # =====================================================
-        # PASO 5 — EXCEL
+        # PASO 5 — EXCEL (solo si el usuario lo pidió)
         # =====================================================
         sheet = (
             tool_name
@@ -2455,7 +2469,7 @@ Devuelve SOLO JSON válido:
                 rows,
                 sheet_name=sheet,
             )
-            if rows else None
+            if (rows and _wants_excel(question)) else None
         )
 
         excel_name = (

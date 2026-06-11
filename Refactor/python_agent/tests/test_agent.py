@@ -373,6 +373,17 @@ class TestAgeFilters(unittest.TestCase):
         self.assertEqual(len(fs), 2)
 
 
+class TestWantsExcel(unittest.TestCase):
+    def test_pide_excel(self):
+        self.assertTrue(ca._wants_excel("dame el excel de los pacientes masculinos"))
+        self.assertTrue(ca._wants_excel("quiero descargar la lista"))
+        self.assertTrue(ca._wants_excel("exportar las citas de abril"))
+
+    def test_no_pide_excel(self):
+        self.assertFalse(ca._wants_excel("cuantos pacientes masculinos hay"))
+        self.assertFalse(ca._wants_excel("dame los pacientes masculinos"))
+
+
 class TestSingleRowText(unittest.TestCase):
     def test_cita_en_texto(self):
         row = {"fecha": "2026-04-10T18:09:00", "tipo_evento": "Consulta", "estado": "cerrada",
