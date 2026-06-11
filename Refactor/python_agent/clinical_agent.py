@@ -2568,6 +2568,11 @@ Devuelve SOLO JSON válido:
             verbo = "Hay" if _is_count else "Encontré"
             answer = f"{verbo} {effective_total} {noun}."
 
+            # Conteo ("cuántos…") → solo texto: vaciamos las filas para que el
+            # frontend no dibuje tabla. (Un "dame/lista" sí mantiene la tabla.)
+            if _is_count and not _wants_excel(question):
+                rows = []
+
             _log(
                 f"[COUNT] respuesta determinística: "
                 f"{effective_total} {noun}"
