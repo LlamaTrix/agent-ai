@@ -1063,11 +1063,12 @@ def _extract_report_spec(question: str) -> Optional[Dict[str, Any]]:
     None si no es un reporte.
     """
     q = _strip_accents_lc(question or "")
-    if re.search(r"\b(promedio|media)\s+de\s+edad\b|\bedad\s+(promedio|media)\b", q):
+    # Promedio de edad: "promedio/media" + "edad" (de/por/las edades).
+    if re.search(r"\bedad(?:es)?\b", q) and re.search(r"\b(promedio|media)\b", q):
         return {"type": "avg_age"}
     m = re.search(
         r"\b(?:por|segun|agrupad[oa]s?\s+por|distribuci[oó]n\s+(?:de|por)|cuant[oa]s?\s+por)\s+"
-        r"(sexo|genero|seguro|aseguradora|empresa|estado\s+civil|mes|tipo|estado|metodo)\b",
+        r"(sexo|genero|seguro|aseguradora|empresa|estado\s+civil|mes|tipo|estado|metodo|edad)\b",
         q,
     )
     if m:
@@ -1099,6 +1100,14 @@ def _report_group_value(tool_name: str, dim: str, row: Dict[str, Any]) -> Option
         return "sin seguro" if not row.get("tiene_seguro") else "con seguro"
     if dim == "estado_civil":
         return row.get("estado_civil")
+    if dim == "edad":
+        e = row.get("edad")
+        if not isinstance(e, int):
+            return "(sin dato)"
+        return (
+            "menores de 18" if e < 18 else "18-29" if e < 30 else
+            "30-44" if e < 45 else "45-59" if e < 60 else "60+"
+        )
     return None
 
 
@@ -1928,7 +1937,11 @@ class MedicalAgentMCP:
                 tool_name = "citas_filter"
             elif tool_name not in ("citas_filter", "citas_list", "citas_by_patient"):
                 tool_name = "patient_filter"
-            _log(f"[ROUTE] reporte {report_spec} → {tool_name}")
+            # El LLM arma args basura para "por X" (filtro/select/limit) → los
+            # limpiamos y dejamos que los inyectores determinísticos (sexo/edad/
+            # seguro/mes) re-agreguen solo los filtros reales de la pregunta.
+            args = {}
+            _log(f"[ROUTE] reporte {report_spec} → {tool_name} (args limpiados)")
 
         # Si el planner eligió un "list/get" pero incluyó filtros/paginación,
         # preferimos el tool *_filter (determinístico) para que el filtro sí se aplique.
@@ -1978,6 +1991,21 @@ class MedicalAgentMCP:
                 ]
                 args["filters"] = kept + presence_filters
                 _log(f"[PRESENCE] filtros inyectados: {presence_filters}")
+
+        # SEXO positivo en pacientes ("femeninas", "masculinos") → filtro
+        # determinístico sobre persona.sexo (sirve para reportes y para que no
+        # dependa del LLM). Solo si hay UN sexo y no es negación.
+        if tool_name in ("patient_filter", "person_filter"):
+            sexo_pac = _extract_sexo_positive(question)
+            if sexo_pac:
+                kept = [
+                    f for f in (args.get("filters") or [])
+                    if isinstance(f, dict) and f.get("field") not in ("sexo", "persona.sexo")
+                ]
+                args["filters"] = kept + [
+                    {"field": "persona.sexo", "op": "eq", "value": sexo_pac}
+                ]
+                _log(f"[SEXO] pacientes sexo={sexo_pac}")
 
         # NOMBRE → buscar en nombre Y apellido (el usuario puede dar el apellido
         # pero el LLM lo filtra como nombre). Ver _broaden_name_filter.

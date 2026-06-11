@@ -386,7 +386,18 @@ class TestReportes(unittest.TestCase):
 
     def test_detecta_promedio_y_resumen(self):
         self.assertEqual(ca._extract_report_spec("promedio de edad de los pacientes")["type"], "avg_age")
+        self.assertEqual(ca._extract_report_spec("dame el promedio por edad de todos los pacientes")["type"], "avg_age")
+        self.assertEqual(ca._extract_report_spec("edad promedio")["type"], "avg_age")
         self.assertEqual(ca._extract_report_spec("dame un resumen de pacientes")["type"], "summary")
+
+    def test_group_by_edad_bucketiza(self):
+        self.assertEqual(ca._extract_report_spec("pacientes por edad"), {"type": "group_by", "dim": "edad"})
+        rows = [{"edad": 5}, {"edad": 25}, {"edad": 70}, {"edad": None}]
+        _, d = ca._build_report({"type": "group_by", "dim": "edad"}, rows, "patient_filter")
+        grupos = {x["grupo"] for x in d}
+        self.assertIn("menores de 18", grupos)
+        self.assertIn("60+", grupos)
+        self.assertIn("(sin dato)", grupos)
 
     def test_no_es_reporte(self):
         self.assertIsNone(ca._extract_report_spec("dame los pacientes masculinos"))
