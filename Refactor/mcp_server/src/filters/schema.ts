@@ -25,7 +25,7 @@ export const filterSchemaBase = {
   search: z.object({ text: z.string().min(1), fields: z.array(z.string()).min(1) }).optional(),
   sort: z.object({ field: z.string(), direction: z.enum(["asc", "desc"]).default("asc") }).optional(),
   page: z.number().int().min(1).optional().default(1),
-  pageSize: z.number().int().min(1).max(5000).optional().default(50),
+  pageSize: z.number().int().min(1).max(100000).optional().default(50),
   select: z.array(z.string()).optional(),
-  limit: z.number().int().min(1).max(5000).optional(),
+  limit: z.number().int().min(1).max(100000).optional(),
 };

@@ -1939,8 +1939,9 @@ class MedicalAgentMCP:
                 tool_name = "patient_filter"
             # El LLM arma args basura para "por X" (filtro/select/limit) → los
             # limpiamos y dejamos que los inyectores determinísticos (sexo/edad/
-            # seguro/mes) re-agreguen solo los filtros reales de la pregunta.
-            args = {}
+            # seguro/mes) re-agreguen solo los filtros reales. Límite alto para
+            # que el agregado cubra TODO (citas son ~17k).
+            args = {"limit": 100000}
             _log(f"[ROUTE] reporte {report_spec} → {tool_name} (args limpiados)")
 
         # Si el planner eligió un "list/get" pero incluyó filtros/paginación,
