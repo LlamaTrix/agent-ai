@@ -1054,6 +1054,105 @@ def _extract_relative_date_filter(question: str, field: str = "fecha") -> Option
     return None
 
 
+def _extract_report_spec(question: str) -> Optional[Dict[str, Any]]:
+    """Detecta pedido de reporte/estadística sobre las filas ya filtradas.
+
+    - "promedio de edad" → {type: avg_age}
+    - "por sexo/seguro/estado civil/mes/tipo/estado" → {type: group_by, dim}
+    - "reporte/resumen/estadísticas" → {type: summary}
+    None si no es un reporte.
+    """
+    q = _strip_accents_lc(question or "")
+    if re.search(r"\b(promedio|media)\s+de\s+edad\b|\bedad\s+(promedio|media)\b", q):
+        return {"type": "avg_age"}
+    m = re.search(
+        r"\b(?:por|segun|agrupad[oa]s?\s+por|distribuci[oó]n\s+(?:de|por)|cuant[oa]s?\s+por)\s+"
+        r"(sexo|genero|seguro|aseguradora|empresa|estado\s+civil|mes|tipo|estado|metodo)\b",
+        q,
+    )
+    if m:
+        return {"type": "group_by", "dim": m.group(1).replace(" ", "_")}
+    if re.search(r"\b(reporte|resumen|estadisticas?)\b", q):
+        return {"type": "summary"}
+    return None
+
+
+def _report_group_value(tool_name: str, dim: str, row: Dict[str, Any]) -> Optional[str]:
+    """Valor por el que se agrupa una fila, según entidad y dimensión."""
+    if tool_name.startswith("citas"):
+        if dim in ("sexo", "genero"):
+            return row.get("patient_sexo")
+        if dim == "mes":
+            return (str(row.get("fecha") or "")[:7]) or None
+        if dim == "tipo":
+            return row.get("tipo_evento")
+        if dim == "estado":
+            return row.get("estado")
+        return None
+    # pacientes
+    if dim in ("sexo", "genero"):
+        return row.get("sexo")
+    if dim in ("seguro", "aseguradora", "empresa"):
+        emp = row.get("empresa_seg")
+        if emp and str(emp).strip():
+            return str(emp).strip().upper()  # une variantes de mayúsculas
+        return "sin seguro" if not row.get("tiene_seguro") else "con seguro"
+    if dim == "estado_civil":
+        return row.get("estado_civil")
+    return None
+
+
+def _build_report(spec: Dict[str, Any], rows: List[Dict[str, Any]], tool_name: str) -> Tuple[str, List[Dict[str, Any]]]:
+    """Devuelve (texto, filas_del_desglose) para un reporte."""
+    from collections import Counter
+
+    entidad = "Citas" if tool_name.startswith("citas") else "Pacientes"
+    total = len(rows)
+
+    if spec["type"] == "avg_age":
+        edades = [r.get("edad") for r in rows if isinstance(r.get("edad"), int)]
+        if not edades:
+            return ("No hay fechas de nacimiento para calcular la edad promedio.", [])
+        prom = sum(edades) / len(edades)
+        return (f"Edad promedio: {prom:.1f} años (sobre {len(edades)} de {total} pacientes con fecha válida).", [])
+
+    if spec["type"] == "group_by":
+        dim = spec["dim"]
+        c: "Counter[str]" = Counter()
+        for r in rows:
+            v = _report_group_value(tool_name, dim, r)
+            c[v if v not in (None, "", "None") else "(sin dato)"] += 1
+        items = c.most_common()
+        if not items:
+            return (f"No pude agrupar por {dim}.", [])
+        lineas = "\n".join(f"• {k}: {v}" for k, v in items)
+        texto = f"{entidad} por {dim.replace('_', ' ')} (total {total}):\n{lineas}"
+        desglose = [{"grupo": k, "cantidad": v} for k, v in items]
+        return (texto, desglose)
+
+    # summary
+    if entidad == "Pacientes":
+        sx = Counter((r.get("sexo") or "(sin dato)") for r in rows)
+        con = sum(1 for r in rows if r.get("tiene_seguro"))
+        ec = Counter((r.get("estado_civil") or "(sin dato)") for r in rows)
+        partes = [
+            f"Resumen de {total} pacientes:",
+            "Por sexo: " + ", ".join(f"{k} {v}" for k, v in sx.most_common()),
+            f"Con seguro: {con} · Sin seguro: {total - con}",
+            "Estado civil: " + ", ".join(f"{k} {v}" for k, v in ec.most_common()),
+        ]
+        return ("\n".join(partes), [])
+    # citas
+    est = Counter((r.get("estado") or "(sin dato)") for r in rows)
+    tip = Counter((r.get("tipo_evento") or "(sin dato)") for r in rows)
+    partes = [
+        f"Resumen de {total} citas:",
+        "Por estado: " + ", ".join(f"{k} {v}" for k, v in est.most_common()),
+        "Por tipo: " + ", ".join(f"{k} {v}" for k, v in tip.most_common()),
+    ]
+    return ("\n".join(partes), [])
+
+
 def _normalize_tool_args(
     args: Any,
     question: str = "",
@@ -1820,6 +1919,17 @@ class MedicalAgentMCP:
             ]
             _log(f"[ROUTE] patient lookup nombre='{patient_lookup}' tokens={name_lookup_tokens}")
 
+        # REPORTE: "por sexo/seguro/mes…", "promedio de edad", "resumen". Nos
+        # aseguramos de usar un tool que traiga filas para computar el agregado.
+        report_spec = _extract_report_spec(question)
+        if report_spec and not patient_lookup:
+            qn = _strip_accents_lc(question)
+            if "cita" in qn and "citas_filter" in self.tools.allowed_tools:
+                tool_name = "citas_filter"
+            elif tool_name not in ("citas_filter", "citas_list", "citas_by_patient"):
+                tool_name = "patient_filter"
+            _log(f"[ROUTE] reporte {report_spec} → {tool_name}")
+
         # Si el planner eligió un "list/get" pero incluyó filtros/paginación,
         # preferimos el tool *_filter (determinístico) para que el filtro sí se aplique.
         if tool_name == "payments_list" and _has_filter_pipeline_args(args):
@@ -2289,6 +2399,27 @@ Devuelve SOLO JSON válido:
             if isinstance(mcp_total, int)
             else len(rows)
         )
+
+        # =====================================================
+        # REPORTE → computamos el agregado en el agente y devolvemos
+        # =====================================================
+        if report_spec and rows:
+            texto, desglose = _build_report(report_spec, rows, tool_name)
+            excel_rep = (
+                _rows_to_excel_b64(desglose or rows, sheet_name="Reporte")
+                if (_wants_excel(question)) else None
+            )
+            _log(f"[REPORT] {report_spec['type']} sobre {len(rows)} filas")
+            return {
+                "answer": texto,
+                "data": {
+                    "rows": desglose,
+                    "row_count": len(desglose),
+                },
+                "steps": 2,
+                "excel_bytes": excel_rep,
+                "excel_name": "reporte.xlsx" if excel_rep else None,
+            }
 
         # =====================================================
         # CONTEXTO EXTRA

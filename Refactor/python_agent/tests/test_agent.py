@@ -378,6 +378,42 @@ class TestAgeFilters(unittest.TestCase):
         self.assertEqual(len(fs), 2)
 
 
+class TestReportes(unittest.TestCase):
+    def test_detecta_group_by(self):
+        self.assertEqual(ca._extract_report_spec("dame los pacientes por sexo"), {"type": "group_by", "dim": "sexo"})
+        self.assertEqual(ca._extract_report_spec("citas por mes"), {"type": "group_by", "dim": "mes"})
+        self.assertEqual(ca._extract_report_spec("pacientes por estado civil"), {"type": "group_by", "dim": "estado_civil"})
+
+    def test_detecta_promedio_y_resumen(self):
+        self.assertEqual(ca._extract_report_spec("promedio de edad de los pacientes")["type"], "avg_age")
+        self.assertEqual(ca._extract_report_spec("dame un resumen de pacientes")["type"], "summary")
+
+    def test_no_es_reporte(self):
+        self.assertIsNone(ca._extract_report_spec("dame los pacientes masculinos"))
+        self.assertIsNone(ca._extract_report_spec("citas de abril"))
+
+    def test_group_by_sexo_cuenta_bien(self):
+        rows = [{"sexo": "Masculino"}, {"sexo": "Femenino"}, {"sexo": "Masculino"}, {"sexo": None}]
+        texto, desglose = ca._build_report({"type": "group_by", "dim": "sexo"}, rows, "patient_filter")
+        d = {x["grupo"]: x["cantidad"] for x in desglose}
+        self.assertEqual(d["Masculino"], 2)
+        self.assertEqual(d["Femenino"], 1)
+        self.assertEqual(d["(sin dato)"], 1)
+        self.assertIn("total 4", texto)
+
+    def test_avg_age(self):
+        rows = [{"edad": 10}, {"edad": 20}, {"edad": None}]
+        texto, _ = ca._build_report({"type": "avg_age"}, rows, "patient_filter")
+        self.assertIn("15.0", texto)
+
+    def test_group_by_citas_mes(self):
+        rows = [{"fecha": "2026-04-01T00:00:00"}, {"fecha": "2026-04-15T00:00:00"}, {"fecha": "2026-03-02T00:00:00"}]
+        _, desglose = ca._build_report({"type": "group_by", "dim": "mes"}, rows, "citas_filter")
+        d = {x["grupo"]: x["cantidad"] for x in desglose}
+        self.assertEqual(d["2026-04"], 2)
+        self.assertEqual(d["2026-03"], 1)
+
+
 class TestWantsExcel(unittest.TestCase):
     def test_pide_excel(self):
         self.assertTrue(ca._wants_excel("dame el excel de los pacientes masculinos"))

@@ -48,9 +48,9 @@ export function buildPatientPresetFilters(
   if (preset?.tiene_fecha_nacimiento === true) filters.push({ field: "__has_birthdate", op: "eq", value: true });
   if (preset?.tiene_fecha_nacimiento === false) filters.push({ field: "__has_birthdate", op: "eq", value: false });
 
-  // Seguro / estado civil / presencia de teléfono
-  if (preset?.num_seguro) filters.push({ field: "persona.num_seguro", op: "contains", value: preset.num_seguro });
-  if (preset?.empresa_seg) filters.push({ field: "persona.empresa_seg", op: "contains", value: preset.empresa_seg });
+  // Seguro: num_seguro / empresa_seg viven en la RAÍZ del paciente (no en persona).
+  if (preset?.num_seguro) filters.push({ field: "num_seguro", op: "contains", value: preset.num_seguro });
+  if (preset?.empresa_seg) filters.push({ field: "empresa_seg", op: "contains", value: preset.empresa_seg });
   if (preset?.tiene_seguro === true) filters.push({ field: "__has_seguro", op: "eq", value: true });
   if (preset?.tiene_seguro === false) filters.push({ field: "__has_seguro", op: "eq", value: false });
   if (preset?.estado_civil) filters.push({ field: "persona.estado_civil", op: "eq", value: preset.estado_civil });
