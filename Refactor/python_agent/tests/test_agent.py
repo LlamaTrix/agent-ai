@@ -318,6 +318,22 @@ class TestRelativeDate(unittest.TestCase):
         self.assertIsNone(ca._extract_relative_date_filter("dame las citas de varones"))
 
 
+class TestSexoFilters(unittest.TestCase):
+    def test_otro_es_ni_masculino_ni_femenino(self):
+        fs = ca._sexo_filters("persona.sexo", "Otro")
+        self.assertEqual(fs, [
+            {"field": "persona.sexo", "op": "neq", "value": "Masculino"},
+            {"field": "persona.sexo", "op": "neq", "value": "Femenino"},
+        ])
+
+    def test_sin_genero_detecta_otro(self):
+        self.assertEqual(ca._extract_sexo_positive("dame los pacientes sin genero"), "Otro")
+
+    def test_masculino_es_eq(self):
+        self.assertEqual(ca._sexo_filters("persona.sexo", "Masculino"),
+                         [{"field": "persona.sexo", "op": "eq", "value": "Masculino"}])
+
+
 class TestSexoPositive(unittest.TestCase):
     def test_un_sexo_afirmativo(self):
         self.assertEqual(ca._extract_sexo_positive("dame citas con varones en abril"), "Masculino")

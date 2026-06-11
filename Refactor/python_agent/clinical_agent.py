@@ -932,6 +932,18 @@ def _extract_sexo_positive(question: str) -> Optional[str]:
     return found[0] if len(found) == 1 else None
 
 
+def _sexo_filters(field: str, sexo: str) -> List[Dict[str, Any]]:
+    """Filtros para un sexo. "Otro" (sin género) = ni Masculino ni Femenino
+    (incluye Otro y vacíos/nulos), no un eq exacto a "Otro".
+    """
+    if sexo == "Otro":
+        return [
+            {"field": field, "op": "neq", "value": "Masculino"},
+            {"field": field, "op": "neq", "value": "Femenino"},
+        ]
+    return [{"field": field, "op": "eq", "value": sexo}]
+
+
 def _extract_presence_filters(question: str) -> Optional[List[Dict[str, Any]]]:
     """Presencia/ausencia de seguro o teléfono → filtros __has_* determinísticos.
 
@@ -2007,9 +2019,7 @@ class MedicalAgentMCP:
                     f for f in (args.get("filters") or [])
                     if isinstance(f, dict) and f.get("field") not in ("sexo", "persona.sexo")
                 ]
-                args["filters"] = kept + [
-                    {"field": "persona.sexo", "op": "eq", "value": sexo_pac}
-                ]
+                args["filters"] = kept + _sexo_filters("persona.sexo", sexo_pac)
                 _log(f"[SEXO] pacientes sexo={sexo_pac}")
 
         # NOMBRE → buscar en nombre Y apellido (el usuario puede dar el apellido
@@ -2046,10 +2056,7 @@ class MedicalAgentMCP:
 
             sexo_cita = _extract_sexo_positive(question)
             if sexo_cita:
-                cita_extra.append(
-                    {"field": "patient.persona.sexo",
-                        "op": "eq", "value": sexo_cita}
-                )
+                cita_extra.extend(_sexo_filters("patient.persona.sexo", sexo_cita))
 
             for f in (_extract_age_filters(question) or []):
                 cita_extra.append(
