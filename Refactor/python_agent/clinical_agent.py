@@ -643,10 +643,13 @@ def _single_row_text(tool_name: str, row: Dict[str, Any]) -> Optional[str]:
         ]
         encabezado = row.get("nombre") or "Paciente"
 
-    detalle = " · ".join(f"{k}: {v}" for k, v in campos if v not in (None, "", "None"))
-    if not detalle:
+    lineas = [f"• {encabezado}"]
+    for k, v in campos:
+        if v not in (None, "", "None"):
+            lineas.append(f"{k}: {v}")
+    if len(lineas) == 1:  # no hay ningún dato → que decida el flujo normal
         return None
-    return f"{encabezado} — {detalle}."
+    return "\n".join(lineas)
 
 
 def _flatten_cita_row(row: Dict[str, Any]) -> Dict[str, Any]:
@@ -859,17 +862,15 @@ def _extract_field_selection(question: str, tool_name: str):
 
 def _format_rows_as_text(rows: List[Dict[str, Any]], noun: str, total: int) -> str:
     """Lista corta en texto bien formateado (1er campo como título, resto detalle)."""
-    lineas = [f"Encontré {total} {noun}:", ""]
+    lineas = [f"Encontré {total} {noun}:"]
     for r in rows:
         if not isinstance(r, dict) or not r:
             continue
         items = list(r.items())
         title = items[0][1]
-        title = title if title not in (None, "") else "—"
-        detalle = " · ".join(
-            f"{k.capitalize()}: {v if v not in (None, '') else '—'}" for k, v in items[1:]
-        )
-        lineas.append(f"• {title} — {detalle}" if detalle else f"• {title}")
+        lineas.append(f"• {title if title not in (None, '') else '—'}")
+        for k, v in items[1:]:
+            lineas.append(f"{k.capitalize()}: {v if v not in (None, '') else '—'}")
     return "\n".join(lineas)
 
 

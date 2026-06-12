@@ -669,7 +669,7 @@ class TestSingleRowText(unittest.TestCase):
         row = {"nombre": "Hernan Olaechea", "ci": "234234", "sexo": "Masculino",
                "edad_texto": "30 años", "telefono": None, "empresa_seg": "ALIANZA"}
         txt = ca._single_row_text("patient_filter", row)
-        self.assertTrue(txt.startswith("Hernan Olaechea —"))
+        self.assertTrue(txt.startswith("• Hernan Olaechea"))
         self.assertIn("CI: 234234", txt)
         self.assertIn("Seguro: ALIANZA", txt)
         self.assertNotIn("Teléfono", txt)  # omite campos vacíos
