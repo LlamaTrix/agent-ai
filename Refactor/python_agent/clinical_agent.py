@@ -726,6 +726,129 @@ def _flatten_visita_row(row: Dict[str, Any]) -> Dict[str, Any]:
     return out
 
 
+# Columnas de la vista compacta por defecto (≤5 campos útiles). Con "excel" el
+# usuario recibe TODAS las columnas. Formato: (clave_origen, etiqueta_mostrada).
+_COMPACT_COLS = {
+    "citas": [
+        ("patient_nombre", "paciente"), ("fecha", "fecha"),
+        ("hora_inicio", "hora"), ("estado", "estado"), ("motivo", "motivo"),
+    ],
+    "patient": [
+        ("nombre", "nombre"), ("ci", "ci"), ("sexo", "sexo"),
+        ("edad_texto", "edad"), ("telefono", "telefono"),
+    ],
+    "recetas": [
+        ("patient_nombre", "paciente"), ("fecha", "fecha"),
+        ("nombre", "medicamento"), ("presentacion", "presentacion"), ("cantidad", "cantidad"),
+    ],
+    "estudios": [
+        ("patient_nombre", "paciente"), ("fecha", "fecha"),
+        ("tipo", "tipo"), ("nombre", "estudio"),
+    ],
+    "visitas": [
+        ("patient_nombre", "paciente"), ("fecha", "fecha"),
+        ("motivo", "motivo"), ("diagnostico", "diagnostico"),
+    ],
+}
+
+
+def _compact_rows(rows: List[Dict[str, Any]], tool_name: str) -> List[Dict[str, Any]]:
+    """Proyecta cada fila a pocas columnas útiles (vista por defecto, sin Excel).
+
+    Si la entidad no tiene columnas definidas, deja las filas tal cual.
+    """
+    cols = _COMPACT_COLS.get((tool_name or "").split("_")[0])
+    if not cols:
+        return rows
+    out = []
+    for r in rows:
+        if isinstance(r, dict):
+            out.append({label: r.get(src) for src, label in cols})
+        else:
+            out.append(r)
+    return out
+
+
+# Vocabulario término(español) → (clave_origen, etiqueta) por entidad, para que
+# el usuario elija columnas ("con los campos nombre y motivo").
+_FIELD_VOCAB = {
+    "citas": {
+        "paciente": ("patient_nombre", "paciente"), "nombre": ("patient_nombre", "paciente"),
+        "fecha": ("fecha", "fecha"), "hora": ("hora_inicio", "hora"),
+        "estado": ("estado", "estado"), "motivo": ("motivo", "motivo"),
+        "tipo": ("tipo_evento", "tipo"), "tipo_evento": ("tipo_evento", "tipo"),
+        "comentarios": ("comentarios", "comentarios"),
+        "sexo": ("patient_sexo", "sexo"), "edad": ("patient_edad", "edad"),
+    },
+    "patient": {
+        "nombre": ("nombre", "nombre"), "ci": ("ci", "ci"), "carnet": ("ci", "ci"),
+        "sexo": ("sexo", "sexo"), "genero": ("sexo", "sexo"),
+        "edad": ("edad_texto", "edad"), "telefono": ("telefono", "telefono"),
+        "celular": ("telefono", "telefono"), "nacimiento": ("fecha_nacimiento", "nacimiento"),
+        "estado": ("estado", "estado"), "seguro": ("empresa_seg", "seguro"),
+        "aseguradora": ("empresa_seg", "seguro"),
+        "estado civil": ("estado_civil", "estado civil"),
+    },
+    "recetas": {
+        "paciente": ("patient_nombre", "paciente"),
+        "medicamento": ("nombre", "medicamento"), "nombre": ("nombre", "medicamento"),
+        "presentacion": ("presentacion", "presentacion"), "cantidad": ("cantidad", "cantidad"),
+        "instrucciones": ("instrucciones", "instrucciones"), "fecha": ("fecha", "fecha"),
+    },
+    "estudios": {
+        "paciente": ("patient_nombre", "paciente"), "nombre": ("patient_nombre", "paciente"),
+        "tipo": ("tipo", "tipo"), "estudio": ("nombre", "estudio"),
+        "descripcion": ("descripcion", "descripcion"), "fecha": ("fecha", "fecha"),
+    },
+    "visitas": {
+        "paciente": ("patient_nombre", "paciente"), "nombre": ("patient_nombre", "paciente"),
+        "motivo": ("motivo", "motivo"), "diagnostico": ("diagnostico", "diagnostico"),
+        "conducta": ("conducta", "conducta"), "fecha": ("fecha", "fecha"),
+        "peso": ("peso", "peso"), "altura": ("altura", "altura"),
+        "temperatura": ("temperatura", "temperatura"),
+    },
+}
+
+
+def _extract_field_selection(question: str, tool_name: str):
+    """Qué columnas quiere el usuario: "all" | lista de (src,label) | None.
+
+    - "todos los campos/columnas" → "all"
+    - "...los campos X, Y" / "columnas X y Y" → [(src,label), ...] (solo si nombra
+      la palabra campos/columnas, para no confundir con filtros como "con teléfono")
+    - None → vista por defecto (compacta).
+    """
+    q = _strip_accents_lc(question)
+    if re.search(r"\btod[oa]s?\s+(?:l[oa]s\s+)?(?:campos|datos|columnas)\b", q):
+        return "all"
+    if not re.search(r"\bcampos?\b|\bcolumnas?\b", q):
+        return None
+    vocab = _FIELD_VOCAB.get((tool_name or "").split("_")[0])
+    if not vocab:
+        return None
+    found = []
+    for term, pair in vocab.items():
+        if re.search(rf"\b{re.escape(term)}\b", q) and pair not in found:
+            found.append(pair)
+    return found or None
+
+
+def _format_rows_as_text(rows: List[Dict[str, Any]], noun: str, total: int) -> str:
+    """Lista corta en texto bien formateado (1er campo como título, resto detalle)."""
+    lineas = [f"Encontré {total} {noun}:", ""]
+    for r in rows:
+        if not isinstance(r, dict) or not r:
+            continue
+        items = list(r.items())
+        title = items[0][1]
+        title = title if title not in (None, "") else "—"
+        detalle = " · ".join(
+            f"{k}: {v if v not in (None, '') else '—'}" for k, v in items[1:]
+        )
+        lineas.append(f"• {title} — {detalle}" if detalle else f"• {title}")
+    return "\n".join(lineas)
+
+
 def _flatten_patient_row(row: Dict[str, Any]) -> Dict[str, Any]:
     """
     Aplana un paciente y agrega fallbacks inteligentes
@@ -2630,6 +2753,12 @@ class MedicalAgentMCP:
         # de pageSize=50 que descuadraba conteos/listas/Excel).
         args = _ensure_result_limit(args)
 
+        # El agente controla las columnas (vista compacta / Excel completo).
+        # Quitamos el `select` del LLM para que el MCP devuelva las filas COMPLETAS
+        # (si no, p.ej. select:[id,fecha] borra el nombre del paciente y la hora).
+        if isinstance(args, dict) and (tool_name or "").split("_")[0] in _COMPACT_COLS:
+            args.pop("select", None)
+
         # =====================================================
         # PASO 2 — EJECUTAR TOOL
         # =====================================================
@@ -3119,24 +3248,56 @@ Devuelve SOLO JSON válido:
                 _log("[SINGLE] 1 fila → respuesta en texto plano")
 
         # =====================================================
-        # PASO 5 — EXCEL (siempre que haya tabla → descargable)
-        # Si hay filas (una tabla en pantalla), generamos el Excel para que el
-        # usuario pueda descargarlo sin tener que pedir "dame el excel". Los
-        # conteos y la respuesta de 1 fila ya vaciaron `rows` → no generan Excel.
+        # PASO 5 — PRESENTACIÓN (columnas + texto/tabla/Excel)
+        # Política:
+        #  - columnas: las que pida el usuario ("campos X, Y"), o 5 por defecto;
+        #    "todos los campos" → preview compacto + Excel completo.
+        #  - lista ≤10 → texto formateado; >10 → tabla compacta.
+        #  - "excel" → datos completos en tabla + Excel descargable.
+        # (Los conteos y la respuesta de 1 fila ya vaciaron `rows`.)
         # =====================================================
-        sheet = (
-            tool_name
-            .split("_")[0]
-            .capitalize()
-        )
+        sheet = tool_name.split("_")[0].capitalize()
+        excel_b64 = None
 
-        excel_b64 = (
-            _rows_to_excel_b64(
-                rows,
-                sheet_name=sheet,
-            )
-            if rows else None
-        )
+        if rows:
+            family = tool_name.split("_")[0]
+            known = family in _COMPACT_COLS
+            wants_excel = _wants_excel(question)
+            fsel = _extract_field_selection(question, tool_name) if known else None
+            noun = _TOOL_NOUN.get(tool_name, "registros")
+
+            if not known:
+                # Entidades sin vista definida: comportamiento simple (Excel a pedido).
+                excel_b64 = _rows_to_excel_b64(rows, sheet_name=sheet) if wants_excel else None
+
+            elif fsel == "all" and not wants_excel:
+                # Muchos campos → preview compacto + Excel COMPLETO + aviso.
+                excel_b64 = _rows_to_excel_b64(rows, sheet_name=sheet)
+                rows = _compact_rows(rows, tool_name)
+                answer = (
+                    f"Encontré {effective_total} {noun}. Son muchos campos — "
+                    f"te dejo el Excel completo para descargar."
+                )
+
+            elif wants_excel:
+                # Datos completos en tabla + Excel completo.
+                excel_b64 = _rows_to_excel_b64(rows, sheet_name=sheet)
+
+            else:
+                # Columnas elegidas o compactas (≤5).
+                if isinstance(fsel, list) and fsel:
+                    display = [{label: r.get(src) for src, label in fsel} for r in rows]
+                else:
+                    display = _compact_rows(rows, tool_name)
+
+                if effective_total <= 10 and not _is_count_question(question):
+                    # Pocos → texto formateado, sin tabla ni Excel.
+                    answer = _format_rows_as_text(display, noun, effective_total)
+                    rows = []
+                else:
+                    # Muchos → tabla compacta + Excel descargable de esas columnas.
+                    rows = display
+                    excel_b64 = _rows_to_excel_b64(display, sheet_name=sheet)
 
         excel_name = (
             f"{tool_name.split('_')[0]}.xlsx"

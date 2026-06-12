@@ -163,6 +163,43 @@ class TestDominiosNuevos(unittest.TestCase):
         # pero "por edad" sin verbo de orden sí es group_by
         self.assertEqual(ca._extract_report_spec("pacientes por edad")["type"], "group_by")
 
+    def test_compact_rows_citas(self):
+        rows = [{
+            "id": 1659, "patient_nombre": "Hernan Prueba",
+            "fecha": "2026-06-12T06:29:10Z", "hora_inicio": "2026-06-12T10:00:00Z",
+            "estado": "pendiente", "motivo": "Control", "comentarios": "x", "patient_id": 5,
+        }]
+        out = ca._compact_rows(rows, "citas_filter")
+        self.assertEqual(set(out[0].keys()), {"paciente", "fecha", "hora", "estado", "motivo"})
+        self.assertEqual(out[0]["paciente"], "Hernan Prueba")
+        self.assertEqual(out[0]["hora"], "2026-06-12T10:00:00Z")
+
+    def test_compact_rows_entidad_desconocida_no_cambia(self):
+        rows = [{"a": 1, "b": 2}]
+        self.assertEqual(ca._compact_rows(rows, "antecedents_get"), rows)
+
+    def test_field_selection_todos(self):
+        self.assertEqual(ca._extract_field_selection("dame las citas con todos los campos", "citas_filter"), "all")
+        self.assertEqual(ca._extract_field_selection("citas con todas las columnas", "citas_filter"), "all")
+
+    def test_field_selection_especifica(self):
+        sel = ca._extract_field_selection("dame la agenda con solo los campos nombre y motivo", "citas_filter")
+        self.assertIn(("patient_nombre", "paciente"), sel)
+        self.assertIn(("motivo", "motivo"), sel)
+        self.assertNotIn(("fecha", "fecha"), sel)
+
+    def test_field_selection_none_sin_palabra_campos(self):
+        # "con teléfono" es un FILTRO, no selección de columnas → None
+        self.assertIsNone(ca._extract_field_selection("pacientes con telefono", "patient_filter"))
+        self.assertIsNone(ca._extract_field_selection("dame la agenda de hoy", "citas_filter"))
+
+    def test_format_rows_as_text(self):
+        rows = [{"paciente": "Ana Lopez", "fecha": "2026-04-01", "motivo": "Control"}]
+        txt = ca._format_rows_as_text(rows, "citas", 1)
+        self.assertIn("Encontré 1 citas", txt)
+        self.assertIn("Ana Lopez", txt)
+        self.assertIn("motivo: Control", txt)
+
     def test_wants_sin_genero(self):
         self.assertTrue(ca._wants_sin_genero("pacientes sin género"))
         self.assertTrue(ca._wants_sin_genero("pacientes que no tengan genero"))
