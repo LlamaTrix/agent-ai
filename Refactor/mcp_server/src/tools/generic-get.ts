@@ -52,8 +52,12 @@ const tools: ToolDef[] = [
   { name: "payments_statistics", description: "Estadísticas de pagos: monto de hoy, este mes, este año y total histórico", path: "/v1/payments/statistics" },
   { name: "payments_by_patient", description: "Pagos de un paciente específico", path: "/v1/payments/{patientId}", inputShape: { patientId: z.string() } },
   { name: "recetas_by_visita", description: "Recetas médicas de una visita específica", path: "/v1/recetas/{visitaId}", inputShape: { visitaId: z.string() } },
+  { name: "recetas_list", description: "GET /v1/recetas — TODAS las recetas/medicamentos con su visita, cita y paciente", path: "/v1/recetas" },
+  { name: "recetas_by_patient", description: "GET /v1/recetas/paciente/{patient_id} — recetas de un paciente", path: "/v1/recetas/paciente/{patient_id}", inputShape: { patient_id: z.string() } },
+  { name: "estudios_list", description: "GET /v1/estudios — TODOS los estudios/órdenes (Laboratorio, Gabinete, Cardiológico) con su cita y paciente", path: "/v1/estudios" },
   { name: "estudios_by_patient", description: "Estudios de laboratorio o gabinete de un paciente", path: "/v1/estudios/paciente/{patient_id}", inputShape: { patient_id: z.string() } },
   { name: "estudios_by_cita", description: "Estudios vinculados a una cita específica", path: "/v1/estudios/cita/{cita_id}", inputShape: { cita_id: z.string() } },
+  { name: "visitas_list", description: "GET /v1/visitas — TODAS las visitas/atenciones con su cita y paciente", path: "/v1/visitas" },
   { name: "notas_by_cita", description: "Notas de una cita específica", path: "/v1/notas-citas/cita/{cita_id}", inputShape: { cita_id: z.string() } },
   { name: "archivos_by_patient", description: "Archivos adjuntos de un paciente", path: "/v1/archivospaciente/{patient_id}", inputShape: { patient_id: z.string() } },
 ];

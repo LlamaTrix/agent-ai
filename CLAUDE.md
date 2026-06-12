@@ -160,14 +160,17 @@ Estos campos se **eliminan** de la salida (`stripInternalFields`) pero permiten 
 | `citas_list` / `citas_by_patient` | generic-get.ts | `/v1/citas`, `/v1/citas/{patient_id}` |
 | `citas_filter` | citas.ts | `/v1/citas` (o `/{patient_id}`) + preset |
 | `cita_by_id` | cita-by-id.ts | busca una cita en `/v1/citas` y resuelve su paciente |
-| `visitas_by_patient` / `visitas_by_cita` | generic-get.ts | `/v1/visitas/patient/{id}`, `/v1/visitas/{cita_id}` |
-| `visitas_filter` | visitas.ts | by_patient / by_cita + preset |
+| `visitas_by_patient` / `visitas_by_cita` / `visitas_list` | generic-get.ts | `/v1/visitas/patient/{id}`, `/v1/visitas/{cita_id}`, `/v1/visitas` (todas) |
+| `visitas_filter` (= **Atención**) | visitas.ts | mode=all (`/v1/visitas`) / by_patient / by_cita + preset |
 | `odontogramas` | odontogramas.ts | `/v1/odontogramas` (o `/cita/{id}`, `/paciente/{id}`) + fallback inteligente |
 | `medicamentos` | medicamentos.ts | `/v1/recetasMedicamentos` (catálogo de nombres únicos) |
 | `payments_list` / `payments_by_patient` / `payments_statistics` | generic-get.ts | `/v1/payments`, `/v1/payments/{patientId}`, `/v1/payments/statistics` |
 | `payments_filter` | payments.ts | `/v1/payments` + filtros (preferir sobre payments_list cuando hay filtros) |
-| `estudios_by_patient` / `estudios_by_cita` | generic-get.ts | `/v1/estudios/...` |
-| `recetas_by_visita` / `notas_by_cita` / `archivos_by_patient` | generic-get.ts | varios |
+| `estudios_filter` (= **Órdenes**) | estudios.ts | `/v1/estudios` (todas) o `/paciente/{id}` o `/cita/{id}` + preset (tipo/fecha) |
+| `estudios_list` / `estudios_by_patient` / `estudios_by_cita` | generic-get.ts | `/v1/estudios`, `/v1/estudios/paciente/{id}`, `/v1/estudios/cita/{id}` |
+| `recetas_filter` (= **Recetas**) | recetas.ts | `/v1/recetas` (todas) o `/paciente/{id}` + preset (medicamento/fecha) |
+| `recetas_list` / `recetas_by_patient` / `recetas_by_visita` | generic-get.ts | `/v1/recetas`, `/v1/recetas/paciente/{id}`, `/v1/recetas/{visitaId}` |
+| `notas_by_cita` / `archivos_by_patient` | generic-get.ts | varios |
 | `antecedents_unique_surgical` / `antecedents_get` | generic-get.ts + antecedents.ts | `/v1/antecedents/...` |
 | `filter_json` | filter-json.ts | filtra un JSON arbitrario (utilidad genérica) |
 | `clinic_bundle` | bundle.ts | **DESACTIVADO** (comentado en index.ts) |

@@ -32,3 +32,6 @@ python_agent/exports/*
 
 # pm2
 .pm2/
+
+# Banco de pruebas (doc local de QA, no se versiona)
+BANCO_PRUEBAS.md

@@ -192,11 +192,26 @@ CITAS (citas_filter / citas_by_patient):
   motivo, comentarios, patient_id
   cita_by_id devuelve una cita concreta y permite saber qué paciente corresponde a un id de cita
 
-VISITAS (visitas_by_patient / visitas_by_cita):
-  motivo, diagnostico, conducta, comentarios
-  peso, altura, temperatura, f_cardiaca, f_respiratoria
-  p_arterial_1, p_arterial_5
+VISITAS / ATENCIÓN (visitas_filter / visitas_by_patient / visitas_by_cita):
+  Una "visita" o "atención" es la consulta registrada (motivo, diagnóstico, signos vitales).
+  motivo, diagnostico, conducta, comentarios, lugar_atencion
+  peso, altura, temperatura, f_cardiaca, f_respiratoria, p_arterial_1, p_arterial_5
   patient_id, cita_id
+  Para listar/contar TODAS las atenciones o filtrar por fecha/paciente usa visitas_filter
+  (sin patient_id trae todas; con preset.patient_id las de un paciente). Mes/fecha → cita.fecha.
+
+ÓRDENES / ESTUDIOS (estudios_filter / estudios_by_patient / estudios_by_cita):
+  Una "orden" es una orden de estudio: Laboratorio, Análisis de Gabinete o Gabinete Cardiológico.
+  Campos: tipo (Laboratorio | Analisis de Gabinete | Gabinete Cardiologico), nombre, descripcion, cita_id
+  Para listar/contar/filtrar órdenes (por tipo, mes/fecha o paciente) usa estudios_filter
+  (sin patient_id trae todas; con preset.patient_id las de un paciente). Mes/fecha → cita.fecha.
+  "órdenes/estudios de laboratorio" → preset.tipo=Laboratorio.
+
+RECETAS (recetas_filter / recetas_by_patient):
+  Una receta es un medicamento prescrito: nombre (medicamento), presentacion, cantidad, instrucciones.
+  Para listar/contar/filtrar recetas (por medicamento, mes/fecha o paciente) usa recetas_filter
+  (sin patient_id trae todas; con preset.patient_id las de un paciente). Mes/fecha → fecha de la cita.
+  NO lo confundas con "medicamentos" (ese tool es solo el catálogo de nombres únicos).
 
 ODONTOGRAMAS (odontogramas):
   diente, diagnostico, tratamiento, costo
@@ -233,18 +248,25 @@ OPERADORES de filtro: eq, neq, gt, gte, lt, lte, contains, startsWith, endsWith,
 - filters SIEMPRE debe ser una lista de objetos: {{"filters":[{{"field":"campo","op":"operador","value":"valor"}}]}}
 - Para "pacientes que empiezan con la letra M" usa patient_filter con field="persona.nombre", op="startsWith", value="M", limit=1000
 - Nunca uses este formato: {{"filters":{{"persona.nombre":{{"contains":"M"}}}}}}
+- Para "órdenes/estudios/laboratorio/gabinete/ecocardiograma" → estudios_filter (preset.tipo=Laboratorio|Analisis de Gabinete|Gabinete Cardiologico)
+- Para "recetas/medicamentos recetados/prescripciones" → recetas_filter (NUNCA medicamentos, que es solo el catálogo)
+- Para "atenciones/visitas/atendidos" → visitas_filter
+- "recetas de <medicamento>" (ej. "recetas de paracetamol") → recetas_filter con preset.nombre=<medicamento>
+- "recetas del paciente <nombre>" o "qué le recetaron a <nombre>" → recetas_filter con patient_id=<nombre>
+- En estos 3 (estudios/recetas/visitas): si mencionan un paciente por nombre pon patient_id=<nombre> y el sistema lo resuelve; el mes/fecha y el tipo los ajusta el sistema automáticamente
 """
 
 # Tools curadas que el planificador ve — evita saturar con las 26
 _PLANNER_TOOLS = {
     "patient_filter", "citas_filter", "citas_by_patient", "cita_by_id",
-    "visitas_by_patient", "visitas_by_cita",
+    "visitas_filter", "visitas_by_patient", "visitas_by_cita", "visitas_list",
     "odontogramas",
     "medicamentos",
     "dashboard_stats", "payments_statistics", "payments_by_patient", "payments_list",
     "payments_filter",
-    "estudios_by_patient", "estudios_by_cita",
-    "recetas_by_visita", "notas_by_cita", "archivos_by_patient",
+    "estudios_filter", "estudios_list", "estudios_by_patient", "estudios_by_cita",
+    "recetas_filter", "recetas_list", "recetas_by_patient", "recetas_by_visita",
+    "notas_by_cita", "archivos_by_patient",
     "antecedents_get",
 }
 
@@ -340,7 +362,7 @@ _PATIENT_LOOKUP_STOP = {
     "casado", "casados", "registrado", "registrados", "nuevo", "nuevos",
     "hombre", "hombres", "mujer", "mujeres", "varon", "varones", "que", "tengo",
     "con", "sin", "seguro", "telefono", "celular", "tiene", "tienen", "tengan",
-    "numero", "edad", "ano", "anos",
+    "numero", "edad", "ano", "anos", "hay", "existen", "son", "hubo",
 }
 
 def _extract_patient_name_lookup(question: str) -> Optional[str]:
@@ -350,9 +372,13 @@ def _extract_patient_name_lookup(question: str) -> Optional[str]:
     nombre+apellidos). None si es sobre otra entidad o si parece un filtro.
     """
     if re.search(
-        r"\b(cita|citas|pago|pagos|visita|visitas|odontograma|antecedente|receta|estudio)",
+        r"\b(cita|citas|pago|pagos|visita|visitas|odontograma|antecedente|receta|estudio|orden)",
         _strip_accents_lc(question or ""),
     ):
+        return None
+
+    # Un conteo ("cuántos pacientes hay") NO es una búsqueda de un paciente puntual.
+    if _is_count_question(question):
         return None
 
     # Un reporte ("por sexo", "resumen"…) no es una búsqueda por nombre.
@@ -644,6 +670,61 @@ def _flatten_cita_row(row: Dict[str, Any]) -> Dict[str, Any]:
     out["patient_edad"] = edad_text
 
     return out
+
+
+def _flatten_estudio_row(row: Dict[str, Any]) -> Dict[str, Any]:
+    """Estudio/orden: sube tipo, fecha (de la cita) y nombre del paciente al raíz.
+
+    /v1/estudios trae cada estudio con `cita` embebida (cita.fecha, cita.patient.
+    persona.*). Soltamos el objeto `cita` (pesado) y exponemos lo útil.
+    """
+    if not isinstance(row, dict):
+        return row
+    cita = row.get("cita") if isinstance(row.get("cita"), dict) else {}
+    patient = cita.get("patient") if isinstance(cita.get("patient"), dict) else {}
+    persona = patient.get("persona") if isinstance(patient.get("persona"), dict) else {}
+
+    out = {k: v for k, v in row.items() if k != "cita"}
+    out["fecha"] = cita.get("fecha")
+    out["patient_nombre"] = " ".join(
+        filter(None, [persona.get("nombre"), persona.get("apellidos")])
+    ) or None
+    return out
+
+
+def _flatten_receta_row(row: Dict[str, Any]) -> Dict[str, Any]:
+    """Receta: sube fecha (de la cita de su visita) y nombre del paciente al raíz."""
+    if not isinstance(row, dict):
+        return row
+    visita = row.get("visita") if isinstance(row.get("visita"), dict) else {}
+    cita = visita.get("cita") if isinstance(visita.get("cita"), dict) else {}
+    patient = visita.get("patient") if isinstance(visita.get("patient"), dict) else {}
+    persona = patient.get("persona") if isinstance(patient.get("persona"), dict) else {}
+
+    out = {k: v for k, v in row.items() if k != "visita"}
+    out["fecha"] = cita.get("fecha")
+    out["patient_nombre"] = " ".join(
+        filter(None, [persona.get("nombre"), persona.get("apellidos")])
+    ) or None
+    return out
+
+
+def _flatten_visita_row(row: Dict[str, Any]) -> Dict[str, Any]:
+    """Visita/atención: sube fecha (de la cita), nombre y sexo del paciente al raíz."""
+    if not isinstance(row, dict):
+        return row
+    cita = row.get("cita") if isinstance(row.get("cita"), dict) else {}
+    patient = row.get("patient") if isinstance(row.get("patient"), dict) else {}
+    persona = patient.get("persona") if isinstance(patient.get("persona"), dict) else {}
+
+    out = {k: v for k, v in row.items() if k not in ("patient", "cita")}
+    out["fecha"] = cita.get("fecha")
+    out["patient_nombre"] = " ".join(
+        filter(None, [persona.get("nombre"), persona.get("apellidos")])
+    ) or None
+    out["patient_sexo"] = persona.get("sexo")
+    return out
+
 
 def _flatten_patient_row(row: Dict[str, Any]) -> Dict[str, Any]:
     """
@@ -1079,6 +1160,9 @@ def _extract_report_spec(question: str) -> Optional[Dict[str, Any]]:
     None si no es un reporte.
     """
     q = _strip_accents_lc(question or "")
+    # "ordename/ordenar por X" = ORDENAR (sort), no es un reporte de agrupación.
+    if re.search(r"\bordena|\bordename\b|\bordenar\b|\bordene\b|\bordenad", q):
+        return None
     # Promedio de edad: "promedio/media" + "edad" (de/por/las edades).
     if re.search(r"\bedad(?:es)?\b", q) and re.search(r"\b(promedio|media)\b", q):
         return {"type": "avg_age"}
@@ -1106,6 +1190,22 @@ def _report_group_value(tool_name: str, dim: str, row: Dict[str, Any]) -> Option
         if dim == "estado":
             return row.get("estado")
         return None
+    if tool_name.startswith("estudios"):
+        if dim == "tipo":
+            return row.get("tipo")
+        if dim == "mes":
+            return (str(row.get("fecha") or "")[:7]) or None
+        return None
+    if tool_name.startswith("recetas"):
+        if dim == "mes":
+            return (str(row.get("fecha") or "")[:7]) or None
+        return None
+    if tool_name.startswith("visitas"):
+        if dim in ("sexo", "genero"):
+            return row.get("patient_sexo")
+        if dim == "mes":
+            return (str(row.get("fecha") or "")[:7]) or None
+        return None
     # pacientes
     if dim in ("sexo", "genero"):
         return row.get("sexo")
@@ -1131,7 +1231,16 @@ def _build_report(spec: Dict[str, Any], rows: List[Dict[str, Any]], tool_name: s
     """Devuelve (texto, filas_del_desglose) para un reporte."""
     from collections import Counter
 
-    entidad = "Citas" if tool_name.startswith("citas") else "Pacientes"
+    if tool_name.startswith("citas"):
+        entidad = "Citas"
+    elif tool_name.startswith("estudios"):
+        entidad = "Órdenes"
+    elif tool_name.startswith("recetas"):
+        entidad = "Recetas"
+    elif tool_name.startswith("visitas"):
+        entidad = "Visitas"
+    else:
+        entidad = "Pacientes"
     total = len(rows)
 
     if spec["type"] == "avg_age":
@@ -1167,6 +1276,15 @@ def _build_report(spec: Dict[str, Any], rows: List[Dict[str, Any]], tool_name: s
             "Estado civil: " + ", ".join(f"{k} {v}" for k, v in ec.most_common()),
         ]
         return ("\n".join(partes), [])
+    if entidad == "Órdenes":
+        tip = Counter((r.get("tipo") or "(sin dato)") for r in rows)
+        partes = [
+            f"Resumen de {total} órdenes/estudios:",
+            "Por tipo: " + ", ".join(f"{k} {v}" for k, v in tip.most_common()),
+        ]
+        return ("\n".join(partes), [])
+    if entidad in ("Recetas", "Visitas"):
+        return (f"Resumen: {total} {entidad.lower()}.", [])
     # citas
     est = Counter((r.get("estado") or "(sin dato)") for r in rows)
     tip = Counter((r.get("tipo_evento") or "(sin dato)") for r in rows)
@@ -1348,6 +1466,139 @@ def _looks_like_odontograma_query(question: str) -> bool:
             "canino",
         )
     )
+
+
+def _looks_like_receta_query(question: str) -> bool:
+    """Recetas/prescripciones (≠ catálogo de medicamentos)."""
+    q = _strip_accents_lc(question)
+    return bool(re.search(r"receta|prescripci", q))
+
+
+def _looks_like_estudio_query(question: str) -> bool:
+    """Órdenes = estudios (Laboratorio/Gabinete/Cardiológico).
+
+    "ordenes/órdenes" sí; "ordenar/ordename/en orden" (sort) no → \bordenes?\b.
+    """
+    q = _strip_accents_lc(question)
+    if re.search(r"\bordenes?\b", q):
+        return True
+    return bool(re.search(r"estudio|laboratorio|gabinete|ecocardiograma", q))
+
+
+def _looks_like_visita_query(question: str) -> bool:
+    """Atención = visitas (la consulta registrada)."""
+    q = _strip_accents_lc(question)
+    return bool(re.search(r"\bvisitas?\b|atencion|atendid", q))
+
+
+_ESTUDIO_TIPOS = (
+    (r"cardiolog|ecocardiograma|cardiac", "Gabinete Cardiologico"),
+    (r"laboratorio|sangre|glicemia|hemograma|orina|colesterol", "Laboratorio"),
+    (r"gabinete|radiografia|ecografia|imagen|tomografia|rayos", "Analisis de Gabinete"),
+)
+
+
+def _extract_estudio_tipo(question: str) -> Optional[str]:
+    """Mapea la pregunta al valor exacto de `tipo` de un estudio/orden, o None."""
+    q = _strip_accents_lc(question)
+    for pat, val in _ESTUDIO_TIPOS:
+        if re.search(pat, q):
+            return val
+    return None
+
+
+_DATE_WORDS = {"hoy", "ayer", "manana", "mes", "semana", "este", "esta", "ano", "anio", "dia"}
+
+
+def _extract_receta_medicamento(question: str) -> Optional[str]:
+    """Medicamento en "recetas de <X>" (no nombre de paciente). None si no aplica.
+
+    Evita falsos positivos: si dice "paciente" lo deja al flujo de patient_id, y
+    descarta meses/fechas. Pensado para "recetas de paracetamol" → "paracetamol".
+    """
+    q = _strip_accents_lc(question)
+    if "paciente" in q:
+        return None
+    m = (
+        re.search(r"\brecetas?\s+(?:de|con|del?\s+medicamento)\s+([a-z0-9]{3,})", q)
+        or re.search(r"\bmedicamento\s+([a-z0-9]{3,})", q)
+    )
+    if not m:
+        return None
+    token = m.group(1)
+    if token in _MESES or token in _DATE_WORDS:
+        return None
+    return token
+
+
+_PATIENT_AFTER_STOP = {
+    "masculino", "masculinos", "femenino", "femenina", "femeninas",
+    "activo", "activos", "inactivo", "inactivos",
+    "con", "sin", "por", "mayor", "mayores", "menor", "menores",
+    "de", "del", "la", "el", "los", "las", "que", "este", "esta",
+    # verbos/relleno que NO son nombres
+    "hay", "tengo", "tiene", "tienen", "hubo", "son", "estan", "esta",
+    "registrado", "registrados", "registrada", "registradas",
+    "total", "cuantos", "cuantas", "y", "o", "un", "una", "atendidos",
+}
+
+
+def _extract_patient_name_after_keyword(question: str) -> Optional[str]:
+    """Nombre tras "paciente(s)": "estudios del paciente Luis" → "Luis".
+
+    Para órdenes/recetas/visitas cuando dicen "paciente X". Descarta stopwords
+    ("pacientes masculinos" → None). Hasta 3 tokens.
+    """
+    m = re.search(
+        r"\bpaciente[s]?\s+(?:llamad[oa]\s+)?"
+        r"([A-Za-zÁÉÍÓÚÑáéíóúñ]+(?:\s+[A-Za-zÁÉÍÓÚÑáéíóúñ]+){0,2})",
+        question or "",
+        re.IGNORECASE,
+    )
+    if not m:
+        return None
+    tokens = [
+        t for t in m.group(1).split()
+        if _strip_accents_lc(t) not in _PATIENT_AFTER_STOP
+    ]
+    name = " ".join(tokens).strip()
+    return name or None
+
+
+def _extract_sort_spec(question: str, tool_name: str) -> Optional[Dict[str, str]]:
+    """"ordename los pacientes por edad" → {field, direction} para el pipeline.
+
+    Detecta verbo de orden + campo + dirección. Para pacientes, "edad" se
+    traduce a persona.fecha_nacimiento (invertido: menor edad = nació después).
+    None si no es un pedido de orden reconocible.
+    """
+    q = _strip_accents_lc(question or "")
+    if not re.search(
+        r"\bordena|\bordename\b|\bordenar\b|\bordene\b|\bordenad|"
+        r"de mayor a menor|de menor a mayor|ascendente|descendente",
+        q,
+    ):
+        return None
+
+    desc = bool(re.search(r"de mayor a menor|descendente|mayores? primero|recientes? primero", q))
+    asc = bool(re.search(r"de menor a mayor|ascendente|menores? primero|antiguos? primero", q))
+    direction = "desc" if desc else "asc"  # default asc
+
+    is_patient = bool(tool_name) and tool_name.startswith(("patient", "person"))
+
+    if re.search(r"\bedad(?:es)?\b", q):
+        if is_patient:
+            # edad ascendente = fecha_nacimiento descendente (más joven nació después)
+            inv = "desc" if direction == "asc" else "asc"
+            return {"field": "persona.fecha_nacimiento", "direction": inv}
+        return {"field": "fecha_nacimiento", "direction": direction}
+    if re.search(r"\bnombre\b", q):
+        return {"field": "persona.nombre" if is_patient else "nombre", "direction": direction}
+    if re.search(r"\bfecha\b", q):
+        return {"field": "fecha", "direction": direction}
+    if re.search(r"\bmonto\b|\bsaldo\b", q):
+        return {"field": "monto", "direction": direction}
+    return None
 
 
 def _looks_like_month_or_date_query(question: str) -> bool:
@@ -1960,6 +2211,45 @@ class MedicalAgentMCP:
             args = {"limit": 100000}
             _log(f"[ROUTE] reporte {report_spec} → {tool_name} (args limpiados)")
 
+        # "cuántos pacientes hay" (conteo simple, sin nombre/otra entidad): el
+        # thinker a veces elige dashboard_stats → forzamos patient_filter para
+        # devolver el total real determinístico.
+        if (
+            not report_spec
+            and _is_count_question(question)
+            and tool_name in ("dashboard_stats", "patient_list", None)
+            and "patient_filter" in self.tools.allowed_tools
+        ):
+            qn = _strip_accents_lc(question)
+            if "paciente" in qn and not re.search(
+                r"\b(cita|citas|pago|orden|ordenes|receta|estudio|visita|atencion)", qn
+            ):
+                tool_name = "patient_filter"
+                args = {}
+                _log("[ROUTE] conteo simple de pacientes → patient_filter")
+
+        # ORDENAR: "ordename los pacientes por edad/nombre/fecha" → sort en el
+        # pipeline. Los list/get no aplican pipeline → ruteamos al *_filter para
+        # que el orden sí se aplique. Guardamos sort_spec para la respuesta.
+        sort_spec = _extract_sort_spec(question, tool_name)
+        if sort_spec:
+            _list_to_filter = {
+                "patient_list": "patient_filter", "patient_get": "patient_filter",
+                "person_list": "person_filter", "person_get": "person_filter",
+                "citas_list": "citas_filter", "citas_by_patient": "citas_filter",
+                "payments_list": "payments_filter",
+            }
+            if tool_name in _list_to_filter and _list_to_filter[tool_name] in self.tools.allowed_tools:
+                tool_name = _list_to_filter[tool_name]
+            elif tool_name not in self.tools.allowed_tools or tool_name is None:
+                if "patient_filter" in self.tools.allowed_tools:
+                    tool_name = "patient_filter"
+            # Re-evaluar el campo según el tool final (pacientes usa persona.*).
+            sort_spec = _extract_sort_spec(question, tool_name) or sort_spec
+            if isinstance(args, dict):
+                args["sort"] = sort_spec
+            _log(f"[SORT] {sort_spec} sobre {tool_name}")
+
         # Si el planner eligió un "list/get" pero incluyó filtros/paginación,
         # preferimos el tool *_filter (determinístico) para que el filtro sí se aplique.
         if tool_name == "payments_list" and _has_filter_pipeline_args(args):
@@ -2092,6 +2382,83 @@ class MedicalAgentMCP:
                 ]
                 args["filters"] = kept + cita_extra
                 _log(f"[CITAS] filtros por paciente inyectados: {cita_extra}")
+
+        # =====================================================
+        # DOMINIOS NUEVOS: ÓRDENES (estudios) / RECETAS / ATENCIÓN (visitas)
+        # Routing determinístico por keyword: el código elige el tool y arma el
+        # tipo/fecha; el nombre de paciente lo resuelve _resolve_patient_id. Las
+        # filas del LLM se descartan (solo se conserva su pista de nombre libre).
+        # =====================================================
+        if tool_name != "odontogramas" and not _looks_like_odontograma_query(question):
+            new_domain = None
+            date_field = None
+            if _looks_like_receta_query(question):
+                new_domain, date_field = "recetas_filter", "visita.cita.fecha"
+            elif _looks_like_estudio_query(question):
+                new_domain, date_field = "estudios_filter", "cita.fecha"
+            elif _looks_like_visita_query(question):
+                new_domain, date_field = "visitas_filter", "cita.fecha"
+
+            if new_domain and new_domain in self.tools.allowed_tools:
+                # patient_id que el LLM haya puesto (en cualquier forma).
+                pid = (
+                    args.get("patient_id")
+                    or args.get("patientId")
+                    or (args.get("preset") or {}).get("patient_id")
+                )
+                if pid is None:
+                    for f in (args.get("filters") or []):
+                        if isinstance(f, dict) and f.get("field") in ("patient_id", "patientId"):
+                            pid = f.get("value")
+                            break
+                # "estudios/recetas/visitas del paciente X" → extraer X aunque el
+                # LLM no lo haya puesto como patient_id (si no, traía TODO).
+                if pid is None:
+                    pid = _extract_patient_name_after_keyword(question)
+                # Pista de nombre libre (medicamento / nombre de estudio).
+                pr = args.get("preset") if isinstance(args.get("preset"), dict) else {}
+                nombre_hint = pr.get("nombre")
+                # Medicamento determinístico: "recetas de paracetamol" → nombre=paracetamol
+                # (no toca "recetas del paciente X", que va por patient_id).
+                if not nombre_hint and new_domain == "recetas_filter":
+                    nombre_hint = _extract_receta_medicamento(question)
+
+                clean: Dict[str, Any] = {}
+                # visitas_filter usa patientId (top-level); estudios/recetas usan
+                # patient_id (top-level). Ambos los resuelve el bloque _ID_ARGS.
+                if pid is not None:
+                    if new_domain == "visitas_filter":
+                        clean["patientId"] = pid
+                    else:
+                        clean["patient_id"] = pid
+
+                preset_out: Dict[str, Any] = {}
+                if nombre_hint and new_domain in ("recetas_filter", "estudios_filter"):
+                    preset_out["nombre"] = nombre_hint
+
+                filters_out: List[Dict[str, Any]] = []
+                if new_domain == "estudios_filter":
+                    tipo = _extract_estudio_tipo(question)
+                    if tipo:
+                        filters_out.append({"field": "tipo", "op": "eq", "value": tipo})
+
+                date_filters = (
+                    _extract_month_filter(question, field=date_field)
+                    or _extract_relative_date_filter(question, field=date_field)
+                )
+                if date_filters:
+                    filters_out.extend(date_filters)
+
+                if filters_out:
+                    clean["filters"] = filters_out
+                if preset_out:
+                    clean["preset"] = preset_out
+                if report_spec:
+                    clean["limit"] = 100000  # reportes sobre todo el conjunto
+
+                tool_name = new_domain
+                args = clean
+                _log(f"[ROUTE] dominio nuevo → {new_domain} args={args}")
 
         _log(
             f"[PLAN] tool={tool_name} "
@@ -2373,6 +2740,29 @@ Devuelve SOLO JSON válido:
                 for r in rows
             ]
 
+        elif tool_name in (
+            "estudios_filter",
+            "estudios_list",
+            "estudios_by_patient",
+            "estudios_by_cita",
+        ):
+            rows = [_flatten_estudio_row(r) for r in rows]
+
+        elif tool_name in (
+            "recetas_filter",
+            "recetas_list",
+            "recetas_by_patient",
+        ):
+            rows = [_flatten_receta_row(r) for r in rows]
+
+        elif tool_name in (
+            "visitas_filter",
+            "visitas_list",
+            "visitas_by_patient",
+            "visitas_by_cita",
+        ):
+            rows = [_flatten_visita_row(r) for r in rows]
+
         # =====================================================
         # FIX SEGURO / ESTADO CIVIL
         # =====================================================
@@ -2532,9 +2922,18 @@ Devuelve SOLO JSON válido:
             "payments_list": "pagos",
             "payments_filter": "pagos",
             "payments_by_patient": "pagos",
+            "estudios_filter": "órdenes",
+            "estudios_list": "órdenes",
             "estudios_by_patient": "estudios",
             "estudios_by_cita": "estudios",
+            "recetas_filter": "recetas",
+            "recetas_list": "recetas",
+            "recetas_by_patient": "recetas",
             "recetas_by_visita": "recetas",
+            "visitas_filter": "atenciones",
+            "visitas_list": "atenciones",
+            "visitas_by_patient": "visitas",
+            "visitas_by_cita": "visitas",
             "notas_by_cita": "notas",
             "archivos_by_patient": "archivos",
             "antecedents_get": "antecedentes",
@@ -2562,8 +2961,16 @@ Devuelve SOLO JSON válido:
         # REAL determinísticamente, sin depender de que el LLM cuente bien
         # (alucinaba números, ej. "son 24" con 343 filas).
         _is_count = _is_count_question(question)
+        # Tools de filtro de los dominios nuevos: aunque la pregunta no diga
+        # "cuántos…", respondemos el TOTAL real determinístico. Si no, el LLM
+        # cuenta la muestra que ve (ej. 50) y el número no cuadra con el Excel.
+        _domain_filter_tool = tool_name in (
+            "recetas_filter", "recetas_list", "recetas_by_patient",
+            "estudios_filter", "estudios_list",
+            "visitas_filter", "visitas_list",
+        )
         if (
-            (_is_count or _is_list_request(question))
+            (_is_count or _is_list_request(question) or _domain_filter_tool or bool(sort_spec))
             and rows
             and tool_name != "cita_by_id"
         ):

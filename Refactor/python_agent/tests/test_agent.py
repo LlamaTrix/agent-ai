@@ -98,6 +98,136 @@ class TestEdad(unittest.TestCase):
         self.assertTrue(text.endswith("año") or text.endswith("años"))
 
 
+class TestDominiosNuevos(unittest.TestCase):
+    # --- Detección de dominio (órdenes/recetas/atención) ---
+    def test_looks_like_receta(self):
+        self.assertTrue(ca._looks_like_receta_query("cuántas recetas se emitieron en abril"))
+        self.assertTrue(ca._looks_like_receta_query("qué medicamentos le recetaron a Juan"))
+        self.assertTrue(ca._looks_like_receta_query("prescripciones de paracetamol"))
+        self.assertFalse(ca._looks_like_receta_query("pacientes sin seguro"))
+
+    def test_looks_like_estudio(self):
+        self.assertTrue(ca._looks_like_estudio_query("órdenes de laboratorio de abril"))
+        self.assertTrue(ca._looks_like_estudio_query("cuántos estudios de gabinete hay"))
+        self.assertTrue(ca._looks_like_estudio_query("ordenes médicas"))
+        self.assertTrue(ca._looks_like_estudio_query("ecocardiogramas de mayo"))
+        # "ordenar/ordename/en orden" (sort) NO debe activar el dominio
+        self.assertFalse(ca._looks_like_estudio_query("ordename los pacientes por edad"))
+        self.assertFalse(ca._looks_like_estudio_query("pacientes en orden alfabético"))
+        self.assertFalse(ca._looks_like_estudio_query("cuántos pacientes hay"))
+
+    def test_looks_like_visita(self):
+        self.assertTrue(ca._looks_like_visita_query("cuántas visitas hubo en abril"))
+        self.assertTrue(ca._looks_like_visita_query("atenciones del mes"))
+        self.assertTrue(ca._looks_like_visita_query("pacientes atendidos hoy"))
+        self.assertFalse(ca._looks_like_visita_query("cuántos pagos hay"))
+
+    def test_extract_estudio_tipo(self):
+        self.assertEqual(ca._extract_estudio_tipo("órdenes de laboratorio"), "Laboratorio")
+        self.assertEqual(ca._extract_estudio_tipo("estudios de gabinete"), "Analisis de Gabinete")
+        self.assertEqual(ca._extract_estudio_tipo("ecocardiograma de Ana"), "Gabinete Cardiologico")
+        self.assertIsNone(ca._extract_estudio_tipo("cuántas órdenes hay"))
+
+    def test_extract_receta_medicamento(self):
+        self.assertEqual(ca._extract_receta_medicamento("recetas de paracetamol"), "paracetamol")
+        self.assertEqual(ca._extract_receta_medicamento("dame las recetas de ibuprofeno"), "ibuprofeno")
+        # "del paciente X" NO es medicamento (va por patient_id)
+        self.assertIsNone(ca._extract_receta_medicamento("recetas del paciente luis"))
+        # mes/fecha no es medicamento
+        self.assertIsNone(ca._extract_receta_medicamento("recetas de abril"))
+        self.assertIsNone(ca._extract_receta_medicamento("cuántas recetas hay"))
+
+    def test_extract_patient_name_after_keyword(self):
+        self.assertEqual(ca._extract_patient_name_after_keyword("estudios del paciente Luis"), "Luis")
+        self.assertEqual(ca._extract_patient_name_after_keyword("recetas del paciente Juan Perez"), "Juan Perez")
+        # "pacientes masculinos" no es un nombre
+        self.assertIsNone(ca._extract_patient_name_after_keyword("cuántos pacientes masculinos hay"))
+        self.assertIsNone(ca._extract_patient_name_after_keyword("cuántas órdenes hay"))
+
+    def test_extract_sort_spec_pacientes_por_edad(self):
+        # "por edad" en pacientes → ordena por fecha_nacimiento (invertido)
+        s = ca._extract_sort_spec("ordename los pacientes por edad", "patient_filter")
+        self.assertEqual(s["field"], "persona.fecha_nacimiento")
+        # default (sin dirección) = edad ascendente = fecha desc (más joven primero)
+        self.assertEqual(s["direction"], "desc")
+        # "de mayor a menor" edad → mayores primero = fecha asc
+        s2 = ca._extract_sort_spec("ordename los pacientes por edad de mayor a menor", "patient_filter")
+        self.assertEqual(s2["direction"], "asc")
+
+    def test_extract_sort_spec_none_si_no_pide_orden(self):
+        self.assertIsNone(ca._extract_sort_spec("cuántos pacientes hay", "patient_filter"))
+
+    def test_report_spec_ignora_ordenar(self):
+        # "ordename por edad" NO es reporte (es sort)
+        self.assertIsNone(ca._extract_report_spec("ordename los pacientes por edad"))
+        # pero "por edad" sin verbo de orden sí es group_by
+        self.assertEqual(ca._extract_report_spec("pacientes por edad")["type"], "group_by")
+
+    def test_patient_lookup_no_captura_conteo(self):
+        # "¿cuántos pacientes hay?" NO debe tomarse como búsqueda del paciente "hay"
+        self.assertIsNone(ca._extract_patient_name_lookup("¿cuántos pacientes hay?"))
+        self.assertIsNone(ca._extract_patient_name_lookup("cuantos pacientes tengo"))
+        # "datos del paciente Juan Perez" sí es una búsqueda por nombre
+        self.assertEqual(
+            ca._extract_patient_name_lookup("datos del paciente Juan Perez"),
+            "juan perez",
+        )
+
+    # --- Flatteners (suben fecha/paciente al nivel raíz) ---
+    def test_flatten_estudio_row(self):
+        row = {
+            "id": 1, "tipo": "Laboratorio",
+            "cita": {"fecha": "2026-04-15T00:00:00.000000Z",
+                     "patient": {"persona": {"nombre": "Ana", "apellidos": "Lopez"}}},
+        }
+        out = ca._flatten_estudio_row(row)
+        self.assertNotIn("cita", out)
+        self.assertEqual(out["tipo"], "Laboratorio")
+        self.assertEqual(out["fecha"], "2026-04-15T00:00:00.000000Z")
+        self.assertEqual(out["patient_nombre"], "Ana Lopez")
+
+    def test_flatten_receta_row(self):
+        row = {
+            "id": 9, "nombre": "Paracetamol", "presentacion": "Jarabe",
+            "visita": {"cita": {"fecha": "2026-05-02T00:00:00.000000Z"},
+                       "patient": {"persona": {"nombre": "Juan", "apellidos": "Perez"}}},
+        }
+        out = ca._flatten_receta_row(row)
+        self.assertNotIn("visita", out)
+        self.assertEqual(out["nombre"], "Paracetamol")
+        self.assertEqual(out["fecha"], "2026-05-02T00:00:00.000000Z")
+        self.assertEqual(out["patient_nombre"], "Juan Perez")
+
+    def test_flatten_visita_row(self):
+        row = {
+            "id": 3, "motivo": "Control",
+            "cita": {"fecha": "2026-06-01T00:00:00.000000Z"},
+            "patient": {"persona": {"nombre": "Eva", "apellidos": "Diaz", "sexo": "Femenino"}},
+        }
+        out = ca._flatten_visita_row(row)
+        self.assertNotIn("patient", out)
+        self.assertNotIn("cita", out)
+        self.assertEqual(out["fecha"], "2026-06-01T00:00:00.000000Z")
+        self.assertEqual(out["patient_nombre"], "Eva Diaz")
+        self.assertEqual(out["patient_sexo"], "Femenino")
+
+    # --- Reportes sobre los dominios nuevos ---
+    def test_report_group_estudios_por_tipo(self):
+        rows = [{"tipo": "Laboratorio"}, {"tipo": "Laboratorio"}, {"tipo": "Analisis de Gabinete"}]
+        texto, desglose = ca._build_report({"type": "group_by", "dim": "tipo"}, rows, "estudios_filter")
+        self.assertIn("Órdenes por tipo", texto)
+        grupos = {d["grupo"]: d["cantidad"] for d in desglose}
+        self.assertEqual(grupos["Laboratorio"], 2)
+        self.assertEqual(grupos["Analisis de Gabinete"], 1)
+
+    def test_report_group_recetas_por_mes(self):
+        rows = [{"fecha": "2026-04-01"}, {"fecha": "2026-04-20"}, {"fecha": "2026-05-03"}]
+        texto, desglose = ca._build_report({"type": "group_by", "dim": "mes"}, rows, "recetas_filter")
+        grupos = {d["grupo"]: d["cantidad"] for d in desglose}
+        self.assertEqual(grupos["2026-04"], 2)
+        self.assertEqual(grupos["2026-05"], 1)
+
+
 class TestEnsureResultLimit(unittest.TestCase):
     def test_inyecta_limit_si_no_hay_paginacion(self):
         out = ca._ensure_result_limit({"filters": []}, default_limit=5000)

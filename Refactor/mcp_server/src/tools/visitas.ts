@@ -10,9 +10,10 @@ import { buildVisitasPresetFilters, visitasPresetSchema } from "../presets/visit
 export function registerVisitasTools(server: McpServer) {
   server.tool(
     "visitas_filter",
-    "Filtra visitas (tabla visitas). mode=by_patient o by_cita, o preset con patient_id/cita_id.",
+    "Filtra visitas/ATENCIONES (tabla visitas). mode=all (todas), by_patient o by_cita; " +
+      "o preset con patient_id/cita_id. Sin patient_id/cita_id usa /v1/visitas (todas).",
     {
-      mode: z.enum(["by_patient", "by_cita"]).optional(),
+      mode: z.enum(["all", "by_patient", "by_cita"]).optional(),
       patientId: z.union([z.string(), z.number()]).optional(),
       citaId: z.union([z.string(), z.number()]).optional(),
       preset: z.object(visitasPresetSchema).optional(),
@@ -23,21 +24,23 @@ export function registerVisitasTools(server: McpServer) {
       try {
         const preset = args?.preset;
 
-        const mode =
-          args?.mode ??
-          (preset?.patient_id != null ? "by_patient" : preset?.cita_id != null ? "by_cita" : undefined);
-        if (!mode) throw new Error("visitas_filter: define mode o preset.patient_id / preset.cita_id");
-
         const patientId = args?.patientId ?? preset?.patient_id;
         const citaId = args?.citaId ?? preset?.cita_id;
+
+        // mode por defecto = "all" (listado global) si no se acota por paciente/cita.
+        const mode =
+          args?.mode ??
+          (patientId != null ? "by_patient" : citaId != null ? "by_cita" : "all");
 
         let baseUrl = "";
         if (mode === "by_patient") {
           if (patientId == null) throw new Error("visitas_filter: falta patientId para mode=by_patient");
           baseUrl = `${API_BASE_URL}/v1/visitas/patient/${encodeURIComponent(String(patientId))}`;
-        } else {
+        } else if (mode === "by_cita") {
           if (citaId == null) throw new Error("visitas_filter: falta citaId para mode=by_cita");
           baseUrl = `${API_BASE_URL}/v1/visitas/${encodeURIComponent(String(citaId))}`;
+        } else {
+          baseUrl = `${API_BASE_URL}/v1/visitas`;
         }
 
         const url = addQueryParams(baseUrl, args?.query);
