@@ -510,7 +510,7 @@ def _explicit_format(question: str) -> Optional[str]:
     detecta aparte con _wants_excel.
     """
     q = _strip_accents_lc(question or "")
-    if re.search(r"\ben\s+(?:una\s+)?tabla\b|\bcomo\s+(?:una\s+)?tabla\b|"
+    if re.search(r"\b(?:en|como|la|una)\s+(?:una\s+)?tabla\b|\btabla\s+de\b|"
                  r"\bformato\s+tabla\b|\ben\s+forma\s+de\s+tabla\b", q):
         return "table"
     if re.search(r"\btexto\s+plano\b|\ben\s+texto\b|\bcomo\s+texto\b|\bformato\s+texto\b|"
@@ -880,14 +880,18 @@ def _extract_field_selection(question: str, tool_name: str):
 def _format_rows_as_text(rows: List[Dict[str, Any]], noun: str, total: int) -> str:
     """Lista corta en texto bien formateado (1er campo como título, resto detalle)."""
     lineas = [f"Encontré {total} {noun}:"]
-    for r in rows:
+    for i, r in enumerate(rows, 1):
         if not isinstance(r, dict) or not r:
             continue
-        items = list(r.items())
-        title = items[0][1]
-        lineas.append(f"• {title if title not in (None, '') else '—'}")
-        for k, v in items[1:]:
-            lineas.append(f"{k.capitalize()}: {v if v not in (None, '') else '—'}")
+        # Solo campos con valor: el primero es el título, el resto el detalle.
+        non_empty = [(k, v) for k, v in r.items() if v not in (None, "", "None")]
+        if non_empty:
+            title, detail = non_empty[0][1], non_empty[1:]
+        else:
+            title, detail = f"Registro {i}", []
+        lineas.append(f"• {title}")
+        for k, v in detail:
+            lineas.append(f"{k.capitalize()}: {v}")
     return "\n".join(lineas)
 
 
@@ -3360,6 +3364,16 @@ Devuelve SOLO JSON válido:
             if excel_b64
             else None
         )
+
+        # Red de seguridad: nunca devolver una respuesta en blanco (ej. si el LLM
+        # redactor devolvió vacío). Damos un texto determinístico según el total.
+        if not (answer or "").strip():
+            noun = _TOOL_NOUN.get(tool_name, "registros")
+            answer = (
+                f"Encontré {effective_total} {noun}."
+                if effective_total
+                else f"No encontré {noun} para esa consulta."
+            )
 
         return {
             "answer": answer,

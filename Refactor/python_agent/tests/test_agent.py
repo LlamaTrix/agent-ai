@@ -199,6 +199,8 @@ class TestDominiosNuevos(unittest.TestCase):
         self.assertEqual(ca._explicit_format("muestrame las citas sin tabla"), "text")
         self.assertEqual(ca._explicit_format("dame los pacientes en tabla"), "table")
         self.assertEqual(ca._explicit_format("citas de hoy como tabla"), "table")
+        self.assertEqual(ca._explicit_format("dame la tabla de las citas del paciente hernan"), "table")
+        self.assertEqual(ca._explicit_format("dame una tabla de pacientes"), "table")
         # "dame la lista de pacientes" NO es "en lista" → no fuerza nada
         self.assertIsNone(ca._explicit_format("dame la lista de pacientes"))
         self.assertIsNone(ca._explicit_format("cuántos pacientes hay"))
@@ -227,6 +229,16 @@ class TestDominiosNuevos(unittest.TestCase):
         self.assertIn("Encontré 1 citas", txt)
         self.assertIn("Ana Lopez", txt)
         self.assertIn("Motivo: Control", txt)
+
+    def test_format_rows_as_text_saltea_vacios(self):
+        # paciente y hora vacíos → no se muestran; el título es el primer no-vacío (fecha)
+        rows = [{"paciente": None, "fecha": "10/04/2026", "hora": None,
+                 "estado": "cerrada", "motivo": "prueba"}]
+        txt = ca._format_rows_as_text(rows, "citas", 1)
+        self.assertNotIn("—", txt)
+        self.assertNotIn("Hora:", txt)
+        self.assertIn("• 10/04/2026", txt)
+        self.assertIn("Estado: cerrada", txt)
 
     def test_wants_sin_genero(self):
         self.assertTrue(ca._wants_sin_genero("pacientes sin género"))
