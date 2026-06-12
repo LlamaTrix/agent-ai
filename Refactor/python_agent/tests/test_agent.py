@@ -163,6 +163,24 @@ class TestDominiosNuevos(unittest.TestCase):
         # pero "por edad" sin verbo de orden sí es group_by
         self.assertEqual(ca._extract_report_spec("pacientes por edad")["type"], "group_by")
 
+    def test_wants_sin_genero(self):
+        self.assertTrue(ca._wants_sin_genero("pacientes sin género"))
+        self.assertTrue(ca._wants_sin_genero("pacientes que no tengan genero"))
+        self.assertTrue(ca._wants_sin_genero("pacientes que no tienen sexo"))
+        self.assertFalse(ca._wants_sin_genero("pacientes de género masculino"))
+        self.assertFalse(ca._wants_sin_genero("cuántos pacientes hay"))
+
+    def test_sexo_filters_otro_es_neq_masc_y_fem(self):
+        # "sin género" / "Otro" = ni Masculino ni Femenino (no eq "Otro")
+        fs = ca._sexo_filters("persona.sexo", "Otro")
+        self.assertEqual(
+            fs,
+            [
+                {"field": "persona.sexo", "op": "neq", "value": "Masculino"},
+                {"field": "persona.sexo", "op": "neq", "value": "Femenino"},
+            ],
+        )
+
     def test_patient_lookup_no_captura_conteo(self):
         # "¿cuántos pacientes hay?" NO debe tomarse como búsqueda del paciente "hay"
         self.assertIsNone(ca._extract_patient_name_lookup("¿cuántos pacientes hay?"))

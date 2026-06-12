@@ -1025,6 +1025,24 @@ def _sexo_filters(field: str, sexo: str) -> List[Dict[str, Any]]:
     return [{"field": field, "op": "eq", "value": sexo}]
 
 
+def _wants_sin_genero(question: str) -> bool:
+    """"sin género" / "no tienen/tengan género" / "género no definido" → True.
+
+    Es lo mismo que "ni masculino ni femenino" (= Otro). Lo detectamos aparte
+    porque _extract_sexo_positive/_exclusions no captan esta forma (no nombran
+    un sexo concreto), y daba inconsistencia (una forma traía Otro y la otra 0).
+    """
+    q = _strip_accents_lc(question or "")
+    return bool(
+        re.search(
+            r"sin\s+(?:genero|sexo)|"
+            r"no\s+(?:tiene[n]?|tengan|tenga|definen?|especifica[n]?|indica[n]?)\s+(?:el\s+)?(?:genero|sexo)|"
+            r"(?:genero|sexo)\s+(?:no\s+(?:definid|especificad|indicad)|sin\s+definir|otro)",
+            q,
+        )
+    )
+
+
 def _extract_presence_filters(question: str) -> Optional[List[Dict[str, Any]]]:
     """Presencia/ausencia de seguro o teléfono → filtros __has_* determinísticos.
 
@@ -2288,10 +2306,18 @@ class MedicalAgentMCP:
                 tool_name = "person_filter"
 
             if tool_name in ("patient_filter", "person_filter"):
-                _bad_pres = (
+                # El filtro de presencia (__has_*) es AUTORITATIVO: borramos los
+                # filtros que el LLM haya puesto sobre los campos subyacentes
+                # (num_seguro, empresa_seg, telf*, etc.), porque si los suma con
+                # un op equivocado (ej. num_seguro exists) sobre-restringe → 0.
+                _bad_pres = {
                     "__has_seguro", "tiene_seguro", "persona.tiene_seguro",
                     "__has_phone", "tiene_telefono", "persona.tiene_telefono",
-                )
+                    "seguro", "num_seguro", "persona.num_seguro",
+                    "empresa_seg", "persona.empresa_seg", "ref_medica",
+                    "telefono", "persona.telefono", "tel_referencia", "persona.tel_referencia",
+                    "telf1", "telf2", "persona.telf1", "persona.telf2",
+                }
                 kept = [
                     f for f in (args.get("filters") or [])
                     if isinstance(f, dict) and f.get("field") not in _bad_pres
@@ -2311,6 +2337,23 @@ class MedicalAgentMCP:
                 ]
                 args["filters"] = kept + _sexo_filters("persona.sexo", sexo_pac)
                 _log(f"[SEXO] pacientes sexo={sexo_pac}")
+
+        # SIN GÉNERO: "sin género" / "no tienen/tengan género" = ni Masculino ni
+        # Femenino (= Otro). Igual que "no sean masculino ni femenino", pero esta
+        # forma no nombra un sexo concreto → la detectamos aparte para que las dos
+        # frases den lo mismo (antes una traía Otro y la otra 0).
+        if _wants_sin_genero(question):
+            if tool_name in ("patient_list", "patient_get"):
+                tool_name = "patient_filter"
+            elif tool_name in ("person_list", "person_get"):
+                tool_name = "person_filter"
+            if tool_name in ("patient_filter", "person_filter"):
+                kept = [
+                    f for f in (args.get("filters") or [])
+                    if isinstance(f, dict) and f.get("field") not in ("sexo", "persona.sexo")
+                ]
+                args["filters"] = kept + _sexo_filters("persona.sexo", "Otro")
+                _log("[SEXO] sin género → Otro (neq Masculino, neq Femenino)")
 
         # NOMBRE → buscar en nombre Y apellido (el usuario puede dar el apellido
         # pero el LLM lo filtra como nombre). Ver _broaden_name_filter.
@@ -2835,9 +2878,12 @@ Devuelve SOLO JSON válido:
         # =====================================================
         if report_spec and rows:
             texto, desglose = _build_report(report_spec, rows, tool_name)
+            # Un reporte es un RESUMEN (pocas filas agregadas) → solo texto. El
+            # Excel del desglose solo si lo piden explícitamente ("dame el excel").
+            # (Las LISTAS de registros sí generan Excel siempre — ver más abajo.)
             excel_rep = (
-                _rows_to_excel_b64(desglose or rows, sheet_name="Reporte")
-                if (_wants_excel(question)) else None
+                _rows_to_excel_b64(desglose, sheet_name="Reporte")
+                if (desglose and _wants_excel(question)) else None
             )
             _log(f"[REPORT] {report_spec['type']} sobre {len(rows)} filas")
             return {
@@ -2961,10 +3007,14 @@ Devuelve SOLO JSON válido:
         # REAL determinísticamente, sin depender de que el LLM cuente bien
         # (alucinaba números, ej. "son 24" con 343 filas).
         _is_count = _is_count_question(question)
-        # Tools de filtro de los dominios nuevos: aunque la pregunta no diga
-        # "cuántos…", respondemos el TOTAL real determinístico. Si no, el LLM
-        # cuenta la muestra que ve (ej. 50) y el número no cuadra con el Excel.
+        # Tools de filtro: aunque la pregunta no diga "cuántos…", respondemos el
+        # TOTAL real determinístico. Si no, el LLM cuenta la muestra que ve
+        # (ej. 50) y el número no cuadra con la tabla/Excel. (La respuesta de 1
+        # fila se maneja después y tiene prioridad sobre este encabezado.)
         _domain_filter_tool = tool_name in (
+            "patient_filter", "person_filter",
+            "citas_filter", "citas_by_patient",
+            "payments_filter",
             "recetas_filter", "recetas_list", "recetas_by_patient",
             "estudios_filter", "estudios_list",
             "visitas_filter", "visitas_list",
@@ -3069,7 +3119,10 @@ Devuelve SOLO JSON válido:
                 _log("[SINGLE] 1 fila → respuesta en texto plano")
 
         # =====================================================
-        # PASO 5 — EXCEL (solo si el usuario lo pidió)
+        # PASO 5 — EXCEL (siempre que haya tabla → descargable)
+        # Si hay filas (una tabla en pantalla), generamos el Excel para que el
+        # usuario pueda descargarlo sin tener que pedir "dame el excel". Los
+        # conteos y la respuesta de 1 fila ya vaciaron `rows` → no generan Excel.
         # =====================================================
         sheet = (
             tool_name
@@ -3082,7 +3135,7 @@ Devuelve SOLO JSON válido:
                 rows,
                 sheet_name=sheet,
             )
-            if (rows and _wants_excel(question)) else None
+            if rows else None
         )
 
         excel_name = (
