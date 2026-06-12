@@ -193,6 +193,16 @@ class TestDominiosNuevos(unittest.TestCase):
         self.assertIsNone(ca._extract_field_selection("pacientes con telefono", "patient_filter"))
         self.assertIsNone(ca._extract_field_selection("dame la agenda de hoy", "citas_filter"))
 
+    def test_explicit_format(self):
+        self.assertEqual(ca._explicit_format("dame las citas de hoy en texto plano"), "text")
+        self.assertEqual(ca._explicit_format("dame los pacientes en texto"), "text")
+        self.assertEqual(ca._explicit_format("muestrame las citas sin tabla"), "text")
+        self.assertEqual(ca._explicit_format("dame los pacientes en tabla"), "table")
+        self.assertEqual(ca._explicit_format("citas de hoy como tabla"), "table")
+        # "dame la lista de pacientes" NO es "en lista" → no fuerza nada
+        self.assertIsNone(ca._explicit_format("dame la lista de pacientes"))
+        self.assertIsNone(ca._explicit_format("cuántos pacientes hay"))
+
     def test_fmt_cell_fecha_y_hora(self):
         # fecha ISO → DD/MM/YYYY ; hora ISO → HH:MM
         self.assertEqual(ca._fmt_cell("fecha", "2026-06-12T06:29:10.000000Z"), "12/06/2026")

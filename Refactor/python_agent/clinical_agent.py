@@ -502,6 +502,23 @@ def _wants_excel(question: str) -> bool:
     )
 
 
+def _explicit_format(question: str) -> Optional[str]:
+    """Formato pedido explícitamente: "text" | "table" | None.
+
+    Permite al usuario forzar la presentación ("dame X en texto plano" / "en tabla")
+    por encima de la regla automática (pocos→texto, muchos→tabla). El Excel se
+    detecta aparte con _wants_excel.
+    """
+    q = _strip_accents_lc(question or "")
+    if re.search(r"\ben\s+(?:una\s+)?tabla\b|\bcomo\s+(?:una\s+)?tabla\b|"
+                 r"\bformato\s+tabla\b|\ben\s+forma\s+de\s+tabla\b", q):
+        return "table"
+    if re.search(r"\btexto\s+plano\b|\ben\s+texto\b|\bcomo\s+texto\b|\bformato\s+texto\b|"
+                 r"\ben\s+lista\b|\bsin\s+tabla\b|\bno\s+(?:en|quiero|uses?)\s+tabla\b", q):
+        return "text"
+    return None
+
+
 def _birthdate_cutoff(years: int) -> str:
     """Fecha (YYYY-MM-DD) de hace `years` años desde hoy (America/La_Paz).
 
@@ -3261,6 +3278,7 @@ Devuelve SOLO JSON válido:
             len(rows) == 1
             and not _is_count_question(question)
             and not _wants_excel(question)
+            and _explicit_format(question) != "table"
             and tool_name in (
                 "patient_filter", "patient_list", "patient_get",
                 "citas_filter", "citas_list", "citas_by_patient",
@@ -3315,12 +3333,25 @@ Devuelve SOLO JSON válido:
                 else:
                     display = _compact_rows(rows, tool_name)
 
-                if effective_total <= 10 and not _is_count_question(question):
-                    # Pocos → texto formateado, sin tabla ni Excel.
-                    answer = _format_rows_as_text(display, noun, effective_total)
+                # Formato: el usuario manda ("en texto"/"en tabla"); si no, regla
+                # automática (≤10 → texto, >10 → tabla).
+                fmt = _explicit_format(question)
+                if fmt is None:
+                    fmt = "text" if (effective_total <= 10 and not _is_count_question(question)) else "table"
+
+                if fmt == "text":
+                    # Texto formateado. Si son muchos, mostramos los primeros y avisamos.
+                    MAX_TEXT = 30
+                    shown = display[:MAX_TEXT]
+                    answer = _format_rows_as_text(shown, noun, effective_total)
+                    if effective_total > len(shown):
+                        answer += (
+                            f"\n\n…y {effective_total - len(shown)} más. "
+                            f"Pedí 'en tabla' o 'el excel' para verlos todos."
+                        )
                     rows = []
                 else:
-                    # Muchos → tabla compacta + Excel descargable de esas columnas.
+                    # Tabla compacta + Excel descargable de esas columnas.
                     rows = display
                     excel_b64 = _rows_to_excel_b64(display, sheet_name=sheet)
 
