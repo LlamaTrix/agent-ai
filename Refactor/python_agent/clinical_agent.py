@@ -615,7 +615,11 @@ def _single_row_text(tool_name: str, row: Dict[str, Any]) -> Optional[str]:
         return None
 
     def _fecha(v):
-        return str(v)[:10] if v else None
+        s = str(v)[:10] if v else None
+        if s and re.match(r"^\d{4}-\d{2}-\d{2}$", s):
+            y, mo, d = s.split("-")
+            return f"{d}/{mo}/{y}"
+        return s
 
     if tool_name.startswith("citas"):
         campos = [
@@ -752,6 +756,26 @@ _COMPACT_COLS = {
 }
 
 
+def _fmt_cell(label: str, value: Any) -> Any:
+    """Formatea valores para que los lea un usuario común.
+
+    - columna "fecha"/"nacimiento" → DD/MM/YYYY (saca la hora/ISO)
+    - columna "hora" → HH:MM
+    El resto se deja igual.
+    """
+    if value in (None, "", "None"):
+        return value
+    s = str(value)
+    lab = (label or "").lower()
+    dt = re.match(r"(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2})", s)
+    d = re.match(r"^(\d{4})-(\d{2})-(\d{2})", s)
+    if "hora" in lab and dt:
+        return f"{dt.group(4)}:{dt.group(5)}"
+    if ("fecha" in lab or "nacim" in lab or "cread" in lab) and d:
+        return f"{d.group(3)}/{d.group(2)}/{d.group(1)}"
+    return value
+
+
 def _compact_rows(rows: List[Dict[str, Any]], tool_name: str) -> List[Dict[str, Any]]:
     """Proyecta cada fila a pocas columnas útiles (vista por defecto, sin Excel).
 
@@ -763,7 +787,7 @@ def _compact_rows(rows: List[Dict[str, Any]], tool_name: str) -> List[Dict[str, 
     out = []
     for r in rows:
         if isinstance(r, dict):
-            out.append({label: r.get(src) for src, label in cols})
+            out.append({label: _fmt_cell(label, r.get(src)) for src, label in cols})
         else:
             out.append(r)
     return out
@@ -843,7 +867,7 @@ def _format_rows_as_text(rows: List[Dict[str, Any]], noun: str, total: int) -> s
         title = items[0][1]
         title = title if title not in (None, "") else "—"
         detalle = " · ".join(
-            f"{k}: {v if v not in (None, '') else '—'}" for k, v in items[1:]
+            f"{k.capitalize()}: {v if v not in (None, '') else '—'}" for k, v in items[1:]
         )
         lineas.append(f"• {title} — {detalle}" if detalle else f"• {title}")
     return "\n".join(lineas)
@@ -3286,7 +3310,7 @@ Devuelve SOLO JSON válido:
             else:
                 # Columnas elegidas o compactas (≤5).
                 if isinstance(fsel, list) and fsel:
-                    display = [{label: r.get(src) for src, label in fsel} for r in rows]
+                    display = [{label: _fmt_cell(label, r.get(src)) for src, label in fsel} for r in rows]
                 else:
                     display = _compact_rows(rows, tool_name)
 

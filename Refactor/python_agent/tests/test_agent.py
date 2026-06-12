@@ -172,7 +172,7 @@ class TestDominiosNuevos(unittest.TestCase):
         out = ca._compact_rows(rows, "citas_filter")
         self.assertEqual(set(out[0].keys()), {"paciente", "fecha", "hora", "estado", "motivo"})
         self.assertEqual(out[0]["paciente"], "Hernan Prueba")
-        self.assertEqual(out[0]["hora"], "2026-06-12T10:00:00Z")
+        self.assertEqual(out[0]["hora"], "10:00")  # formateado a HH:MM
 
     def test_compact_rows_entidad_desconocida_no_cambia(self):
         rows = [{"a": 1, "b": 2}]
@@ -193,12 +193,30 @@ class TestDominiosNuevos(unittest.TestCase):
         self.assertIsNone(ca._extract_field_selection("pacientes con telefono", "patient_filter"))
         self.assertIsNone(ca._extract_field_selection("dame la agenda de hoy", "citas_filter"))
 
+    def test_fmt_cell_fecha_y_hora(self):
+        # fecha ISO → DD/MM/YYYY ; hora ISO → HH:MM
+        self.assertEqual(ca._fmt_cell("fecha", "2026-06-12T06:29:10.000000Z"), "12/06/2026")
+        self.assertEqual(ca._fmt_cell("hora", "2026-06-12T02:29:10.000000Z"), "02:29")
+        self.assertEqual(ca._fmt_cell("nacimiento", "1990-05-10"), "10/05/1990")
+        # otras columnas quedan igual
+        self.assertEqual(ca._fmt_cell("estado", "en curso"), "en curso")
+        self.assertEqual(ca._fmt_cell("fecha", None), None)
+
+    def test_compact_rows_formatea_fecha_hora(self):
+        rows = [{
+            "patient_nombre": "David Lozano", "fecha": "2026-06-12T06:29:10.000000Z",
+            "hora_inicio": "2026-06-12T02:29:10.000000Z", "estado": "en curso", "motivo": "asdf",
+        }]
+        out = ca._compact_rows(rows, "citas_filter")[0]
+        self.assertEqual(out["fecha"], "12/06/2026")
+        self.assertEqual(out["hora"], "02:29")
+
     def test_format_rows_as_text(self):
         rows = [{"paciente": "Ana Lopez", "fecha": "2026-04-01", "motivo": "Control"}]
         txt = ca._format_rows_as_text(rows, "citas", 1)
         self.assertIn("Encontré 1 citas", txt)
         self.assertIn("Ana Lopez", txt)
-        self.assertIn("motivo: Control", txt)
+        self.assertIn("Motivo: Control", txt)
 
     def test_wants_sin_genero(self):
         self.assertTrue(ca._wants_sin_genero("pacientes sin género"))
@@ -642,7 +660,7 @@ class TestSingleRowText(unittest.TestCase):
         row = {"fecha": "2026-04-10T18:09:00", "tipo_evento": "Consulta", "estado": "cerrada",
                "motivo": "control", "patient_nombre": "Hernan Olaechea"}
         txt = ca._single_row_text("citas_filter", row)
-        self.assertIn("Fecha: 2026-04-10", txt)
+        self.assertIn("Fecha: 10/04/2026", txt)
         self.assertIn("Tipo: Consulta", txt)
         self.assertIn("Paciente: Hernan Olaechea", txt)
         self.assertNotIn("18:09", txt)  # solo la fecha, sin hora
