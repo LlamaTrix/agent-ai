@@ -195,6 +195,18 @@ class TestDominiosNuevos(unittest.TestCase):
         rows = [{"a": 1, "b": 2}]
         self.assertEqual(ca._compact_rows(rows, "antecedents_get"), rows)
 
+    def test_merge_antecedentes(self):
+        row = {"nombre": "Jose Araque", "sangre": None}
+        ant = {"sangre": "A+", "peso": 70, "altura": 1.75,
+               "alergias": True, "alergias_description": "Penicilina",
+               "medicacion": False, "quirurgicos": True, "quirurgicos_description": "Apendicectomía"}
+        ca._merge_antecedentes(row, ant)
+        self.assertEqual(row["sangre"], "A+")
+        self.assertEqual(row["peso"], 70)
+        self.assertEqual(row["alergias"], "Penicilina")        # usa la descripción
+        self.assertIsNone(row["medicacion"])                   # flag false → None
+        self.assertEqual(row["quirurgicos"], "Apendicectomía")
+
     def test_full_rows_pagos(self):
         rows = [{"monto": 100, "saldo": 0, "metodo": "Efectivo", "motivo": "Consulta",
                  "observaciones": "ok", "created_at": "2025-04-01 03:25:47", "id": 9, "patient_id": 5}]

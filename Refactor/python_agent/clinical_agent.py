@@ -827,9 +827,12 @@ _FULL_COLS = {
         ("nombre", "nombre"), ("ci", "ci"), ("sexo", "sexo"), ("edad_texto", "edad"),
         ("fecha_nacimiento", "nacimiento"), ("telefono", "telefono"), ("telf2", "telefono 2"),
         ("email", "email"), ("direccion", "direccion"), ("residencia", "residencia"),
-        ("ocupacion", "ocupacion"), ("sangre", "sangre"), ("estado_civil", "estado civil"),
+        ("ocupacion", "ocupacion"), ("estado_civil", "estado civil"),
         ("empresa_seg", "seguro"), ("num_seguro", "nro seguro"), ("ref_medica", "ref medica"),
         ("estado", "estado"),
+        # Clínicos (vienen de antecedentes, se mergean en "datos completos"):
+        ("sangre", "sangre"), ("peso", "peso"), ("altura", "altura"),
+        ("alergias", "alergias"), ("medicacion", "medicacion"), ("quirurgicos", "cirugias"),
     ],
     "citas": [
         ("patient_nombre", "paciente"), ("fecha", "fecha"), ("hora_inicio", "hora"),
@@ -890,6 +893,31 @@ def _full_rows(rows: List[Dict[str, Any]], tool_name: str) -> List[Dict[str, Any
         else:
             out.append(_all_scalar_fields(r))
     return out
+
+
+def _ant_flag(ant: Dict[str, Any], flag: str, desc: str) -> Optional[str]:
+    """Para campos sí/no con descripción en antecedentes (alergias, medicación…):
+    devuelve la descripción si existe, si no 'Sí' cuando el flag es verdadero, o None."""
+    d = ant.get(desc)
+    if d and str(d).strip():
+        return str(d).strip()
+    return "Sí" if ant.get(flag) else None
+
+
+def _merge_antecedentes(patient_row: Dict[str, Any], ant: Dict[str, Any]) -> None:
+    """Mergea los datos clínicos (sangre, peso, altura, alergias…) que viven en la
+    tabla antecedents al row del paciente, para 'datos completos'."""
+    if not isinstance(patient_row, dict) or not isinstance(ant, dict):
+        return
+    if ant.get("sangre"):
+        patient_row["sangre"] = ant.get("sangre")
+    if ant.get("peso") not in (None, ""):
+        patient_row["peso"] = ant.get("peso")
+    if ant.get("altura") not in (None, ""):
+        patient_row["altura"] = ant.get("altura")
+    patient_row["alergias"] = _ant_flag(ant, "alergias", "alergias_description")
+    patient_row["medicacion"] = _ant_flag(ant, "medicacion", "medicacion_description")
+    patient_row["quirurgicos"] = _ant_flag(ant, "quirurgicos", "quirurgicos_description")
 
 
 # Vocabulario término(español) → (clave_origen, etiqueta) por entidad, para que
@@ -3181,6 +3209,29 @@ Devuelve SOLO JSON válido:
         )
 
         # =====================================================
+        # "DATOS COMPLETOS" de UN paciente → traer también sus ANTECEDENTES
+        # (sangre, peso, altura, alergias, medicación, cirugías) que viven en
+        # otra tabla, y mergearlos. Solo 1 paciente → 1 fetch extra, sin costo
+        # en listas. Si falla, se ignora (la ficha igual sale).
+        # =====================================================
+        if (
+            tool_name in ("patient_filter", "patient_list", "patient_get")
+            and len(rows) == 1
+            and _extract_field_selection(question, tool_name) == "all"
+            and "antecedents_get" in self.tools.allowed_tools
+        ):
+            pid = rows[0].get("id")
+            if pid:
+                try:
+                    ant_raw = await self.tools.call("antecedents_get", {"id": str(pid)})
+                    ant = ant_raw if isinstance(ant_raw, dict) else None
+                    if isinstance(ant, dict) and "error" not in ant:
+                        _merge_antecedentes(rows[0], ant)
+                        _log("[ANTECEDENTES] mergeados en datos completos del paciente")
+                except Exception as e:
+                    _log(f"[ANTECEDENTES] no se pudieron traer: {repr(e)}")
+
+        # =====================================================
         # REPORTE → computamos el agregado en el agente y devolvemos
         # =====================================================
         if report_spec and rows:
@@ -3415,6 +3466,7 @@ Devuelve SOLO JSON válido:
             and not _is_count_question(question)
             and not _wants_excel(question)
             and _explicit_format(question) != "table"
+            and not _extract_field_selection(question, tool_name)  # "datos completos" → no la ficha corta
             and tool_name in (
                 "patient_filter", "patient_list", "patient_get",
                 "citas_filter", "citas_list", "citas_by_patient",
