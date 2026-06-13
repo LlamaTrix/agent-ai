@@ -195,6 +195,19 @@ class TestDominiosNuevos(unittest.TestCase):
         rows = [{"a": 1, "b": 2}]
         self.assertEqual(ca._compact_rows(rows, "antecedents_get"), rows)
 
+    def test_full_rows_paciente_trae_todos_los_campos(self):
+        rows = [{
+            "nombre": "Alessandra Giorgio", "ci": "00030", "sexo": "Femenino",
+            "edad_texto": "15 años", "telefono": "60883730", "email": "a@x.com",
+            "direccion": "Calle 1", "sangre": "O+", "ocupacion": "Estudiante",
+            "empresa_seg": None, "num_seguro": None, "estado": True,
+        }]
+        out = ca._full_rows(rows, "patient_filter")[0]
+        # incluye campos que la vista compacta NO muestra
+        for k in ("email", "direccion", "sangre", "ocupacion"):
+            self.assertIn(k, out)
+        self.assertEqual(out["nombre"], "Alessandra Giorgio")
+
     def test_field_selection_todos(self):
         self.assertEqual(ca._extract_field_selection("dame las citas con todos los campos", "citas_filter"), "all")
         self.assertEqual(ca._extract_field_selection("citas con todas las columnas", "citas_filter"), "all")

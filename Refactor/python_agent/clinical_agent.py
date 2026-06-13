@@ -785,6 +785,10 @@ def _fmt_cell(label: str, value: Any) -> Any:
     """
     if value in (None, "", "None"):
         return value
+    if isinstance(value, bool):  # estado del paciente, etc.
+        if "estado" in (label or "").lower():
+            return "activo" if value else "inactivo"
+        return "sí" if value else "no"
     s = str(value)
     lab = (label or "").lower()
     dt = re.match(r"(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2})", s)
@@ -802,6 +806,51 @@ def _compact_rows(rows: List[Dict[str, Any]], tool_name: str) -> List[Dict[str, 
     Si la entidad no tiene columnas definidas, deja las filas tal cual.
     """
     cols = _COMPACT_COLS.get((tool_name or "").split("_")[0])
+    if not cols:
+        return rows
+    out = []
+    for r in rows:
+        if isinstance(r, dict):
+            out.append({label: _fmt_cell(label, r.get(src)) for src, label in cols})
+        else:
+            out.append(r)
+    return out
+
+
+# Conjunto COMPLETO de campos por entidad (para "todos los datos/campos").
+_FULL_COLS = {
+    "patient": [
+        ("nombre", "nombre"), ("ci", "ci"), ("sexo", "sexo"), ("edad_texto", "edad"),
+        ("fecha_nacimiento", "nacimiento"), ("telefono", "telefono"), ("telf2", "telefono 2"),
+        ("email", "email"), ("direccion", "direccion"), ("residencia", "residencia"),
+        ("ocupacion", "ocupacion"), ("sangre", "sangre"), ("estado_civil", "estado civil"),
+        ("empresa_seg", "seguro"), ("num_seguro", "nro seguro"), ("ref_medica", "ref medica"),
+        ("estado", "estado"),
+    ],
+    "citas": [
+        ("patient_nombre", "paciente"), ("fecha", "fecha"), ("hora_inicio", "hora"),
+        ("estado", "estado"), ("tipo_evento", "tipo"), ("motivo", "motivo"),
+        ("comentarios", "comentarios"),
+    ],
+    "recetas": [
+        ("patient_nombre", "paciente"), ("fecha", "fecha"), ("nombre", "medicamento"),
+        ("presentacion", "presentacion"), ("cantidad", "cantidad"), ("instrucciones", "instrucciones"),
+    ],
+    "estudios": [
+        ("patient_nombre", "paciente"), ("fecha", "fecha"), ("tipo", "tipo"),
+        ("nombre", "estudio"), ("descripcion", "descripcion"),
+    ],
+    "visitas": [
+        ("patient_nombre", "paciente"), ("fecha", "fecha"), ("motivo", "motivo"),
+        ("diagnostico", "diagnostico"), ("conducta", "conducta"), ("comentarios", "comentarios"),
+        ("peso", "peso"), ("altura", "altura"), ("temperatura", "temperatura"),
+    ],
+}
+
+
+def _full_rows(rows: List[Dict[str, Any]], tool_name: str) -> List[Dict[str, Any]]:
+    """Proyecta a TODOS los campos útiles de la entidad (con etiquetas/orden lindo)."""
+    cols = _FULL_COLS.get((tool_name or "").split("_")[0])
     if not cols:
         return rows
     out = []
@@ -978,6 +1027,18 @@ def _flatten_patient_row(row: Dict[str, Any]) -> Dict[str, Any]:
         "num_seguro": seguro_num,
         "empresa_seg": empresa_seg,
         "estado_civil": estado_civil,
+
+        # Campos extra de persona/paciente (para "todos los datos").
+        "email": persona.get("email"),
+        "telf2": persona.get("telf2"),
+        "tel_referencia": persona.get("tel_referencia"),
+        "referencia": persona.get("referencia"),
+        "direccion": persona.get("direccion"),
+        "residencia": persona.get("residencia"),
+        "ocupacion": persona.get("ocupacion"),
+        "sangre": persona.get("sangre"),
+        "complemento": persona.get("complemento"),
+        "ref_medica": row.get("ref_medica"),
 
         "tiene_seguro": tiene_seguro,
         "tiene_telefono": tiene_telefono,
@@ -3348,13 +3409,22 @@ Devuelve SOLO JSON válido:
                 excel_b64 = _rows_to_excel_b64(rows, sheet_name=sheet) if wants_excel else None
 
             elif fsel == "all" and not wants_excel:
-                # Muchos campos → preview compacto + Excel COMPLETO + aviso.
-                excel_b64 = _rows_to_excel_b64(rows, sheet_name=sheet)
-                rows = _compact_rows(rows, tool_name)
-                answer = (
-                    f"Encontré {effective_total} {noun}. Son muchos campos — "
-                    f"te dejo el Excel completo para descargar."
-                )
+                # "Todos los datos": pocos registros → los mostramos COMPLETOS
+                # (texto o tabla); muchos → preview + Excel (sería ilegible).
+                full = _full_rows(rows, tool_name)
+                if effective_total > 10:
+                    excel_b64 = _rows_to_excel_b64(full, sheet_name=sheet)
+                    rows = _compact_rows(rows, tool_name)
+                    answer = (
+                        f"Encontré {effective_total} {noun}. Son muchos registros — "
+                        f"te dejo el Excel completo con todos los campos."
+                    )
+                elif _explicit_format(question) == "table":
+                    rows = full
+                    excel_b64 = _rows_to_excel_b64(full, sheet_name=sheet)
+                else:
+                    answer = _format_rows_as_text(full, noun, effective_total)
+                    rows = []
 
             elif wants_excel:
                 # Datos completos en tabla + Excel completo.
