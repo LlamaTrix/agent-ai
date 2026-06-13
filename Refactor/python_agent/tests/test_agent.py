@@ -230,6 +230,11 @@ class TestDominiosNuevos(unittest.TestCase):
     def test_field_selection_todos(self):
         self.assertEqual(ca._extract_field_selection("dame las citas con todos los campos", "citas_filter"), "all")
         self.assertEqual(ca._extract_field_selection("citas con todas las columnas", "citas_filter"), "all")
+        # "datos completos" / "detalle completo" / "ficha completa" → todos los campos
+        self.assertEqual(ca._extract_field_selection("dame los datos completos de jose araque", "patient_filter"), "all")
+        self.assertEqual(ca._extract_field_selection("quiero el detalle completo de alessandra", "patient_filter"), "all")
+        self.assertEqual(ca._extract_field_selection("ficha completa del paciente X", "patient_filter"), "all")
+        self.assertEqual(ca._extract_field_selection("toda la info del paciente", "patient_filter"), "all")
 
     def test_field_selection_especifica(self):
         sel = ca._extract_field_selection("dame la agenda con solo los campos nombre y motivo", "citas_filter")

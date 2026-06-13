@@ -947,7 +947,13 @@ def _extract_field_selection(question: str, tool_name: str):
     - None → vista por defecto (compacta).
     """
     q = _strip_accents_lc(question)
-    if re.search(r"\btod[oa]s?\s+(?:l[oa]s\s+)?(?:campos|datos|columnas)\b", q):
+    # "todos los datos/campos", "datos/detalle/ficha/info completos", "ficha completa"
+    if re.search(
+        r"\btod[oa]s?\s+(?:(?:l[oa]s?|el)\s+)?(?:campos|datos|columnas|info\w*)\b"
+        r"|\b(?:datos|informacion|info|ficha|detalle|perfil|registro)\s+complet[oa]s?\b"
+        r"|\bcomplet[oa]s?\s+(?:datos|info\w*)\b",
+        q,
+    ):
         return "all"
     if not re.search(r"\bcampos?\b|\bcolumnas?\b", q):
         return None
