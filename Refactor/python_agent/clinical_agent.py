@@ -1326,10 +1326,12 @@ def _extract_relative_date_filter(question: str, field: str = "fecha") -> Option
     monday = today - timedelta(days=today.weekday())
     if re.search(r"\b(esta\s+semana|semana\s+actual)\b", q):
         return _range(monday, monday + timedelta(days=6))
-    if re.search(r"\bsemana\s+(?:que\s+viene|proxima|siguiente|entrante)\b", q):
+    # "la semana que viene/próxima/siguiente" o "la próxima/siguiente semana"
+    if re.search(r"\bsemana\s+(?:que\s+viene|proxima|siguiente|entrante)\b|"
+                 r"\b(?:proxima|siguiente)\s+semana\b", q):
         nxt = monday + timedelta(days=7)
         return _range(nxt, nxt + timedelta(days=6))
-    if re.search(r"\bsemana\s+(?:pasada|anterior)\b", q):
+    if re.search(r"\bsemana\s+(?:pasada|anterior)\b|\b(?:pasada|anterior)\s+semana\b", q):
         prev = monday - timedelta(days=7)
         return _range(prev, prev + timedelta(days=6))
     if re.search(r"\b(este\s+mes|mes\s+actual)\b", q):
@@ -1673,9 +1675,21 @@ def _looks_like_estudio_query(question: str) -> bool:
 
 
 def _looks_like_visita_query(question: str) -> bool:
-    """Atención = visitas (la consulta registrada)."""
+    """Atención = visitas (la consulta registrada, en pasado)."""
     q = _strip_accents_lc(question)
     return bool(re.search(r"\bvisitas?\b|atencion|atendid", q))
+
+
+def _looks_like_agenda_query(question: str) -> bool:
+    """Agenda / "pacientes que atenderé" = CITAS (turnos), no la tabla pacientes.
+
+    "agenda", o el verbo atender en presente/futuro (atender/atenderé/atiendo).
+    NO matchea "atención/atendidos" (eso es visitas, en pasado).
+    """
+    q = _strip_accents_lc(question)
+    if "agenda" in q:
+        return True
+    return bool(re.search(r"\batiend|\batender", q))
 
 
 _ESTUDIO_TIPOS = (
@@ -2549,6 +2563,22 @@ class MedicalAgentMCP:
                 ]
                 args["filters"] = existing + sexo_exclusions
                 _log(f"[SEXO] exclusiones inyectadas: {sexo_exclusions}")
+
+        # AGENDA / "(cuáles) pacientes atenderé la semana" → son CITAS (turnos),
+        # no la tabla pacientes. Routeamos a citas_filter (el bloque de abajo
+        # inyecta la fecha: hoy/semana/mes). Excluimos "atención/atendidos" que
+        # son visitas (pasado) y los dominios receta/estudio.
+        if (
+            _looks_like_agenda_query(question)
+            and not _looks_like_visita_query(question)
+            and not _looks_like_receta_query(question)
+            and not _looks_like_estudio_query(question)
+            and "citas_filter" in self.tools.allowed_tools
+            and tool_name not in ("citas_filter", "citas_by_patient", "cita_by_id")
+        ):
+            tool_name = "citas_filter"
+            args = {}
+            _log("[ROUTE] agenda/atender → citas_filter")
 
         # CITAS por atributos del paciente: en una cita el sexo/edad del paciente
         # viven en patient.persona.* (no en la raíz). El LLM no conoce esa ruta y

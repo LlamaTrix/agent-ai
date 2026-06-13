@@ -122,6 +122,23 @@ class TestDominiosNuevos(unittest.TestCase):
         self.assertTrue(ca._looks_like_visita_query("pacientes atendidos hoy"))
         self.assertFalse(ca._looks_like_visita_query("cuántos pagos hay"))
 
+    def test_looks_like_agenda(self):
+        # "atender" en presente/futuro y "agenda" → agenda (citas)
+        self.assertTrue(ca._looks_like_agenda_query("cuales pacientes atendere la siguiente semana"))
+        self.assertTrue(ca._looks_like_agenda_query("dame la agenda de hoy"))
+        self.assertTrue(ca._looks_like_agenda_query("a quien atiendo manana"))
+        # "atendidos/atención" es pasado → NO agenda (eso es visitas)
+        self.assertFalse(ca._looks_like_agenda_query("pacientes atendidos el mes pasado"))
+        self.assertFalse(ca._looks_like_agenda_query("cuantos pacientes hay"))
+
+    def test_relative_date_siguiente_semana(self):
+        # ambas formas: "semana siguiente" y "siguiente semana"
+        a = ca._extract_relative_date_filter("citas de la semana que viene", field="fecha")
+        b = ca._extract_relative_date_filter("citas de la siguiente semana", field="fecha")
+        self.assertIsNotNone(a)
+        self.assertIsNotNone(b)
+        self.assertEqual([f["op"] for f in b], ["gte", "lte"])
+
     def test_extract_estudio_tipo(self):
         self.assertEqual(ca._extract_estudio_tipo("órdenes de laboratorio"), "Laboratorio")
         self.assertEqual(ca._extract_estudio_tipo("estudios de gabinete"), "Analisis de Gabinete")
