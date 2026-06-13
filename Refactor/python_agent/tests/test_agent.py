@@ -195,6 +195,25 @@ class TestDominiosNuevos(unittest.TestCase):
         rows = [{"a": 1, "b": 2}]
         self.assertEqual(ca._compact_rows(rows, "antecedents_get"), rows)
 
+    def test_full_rows_pagos(self):
+        rows = [{"monto": 100, "saldo": 0, "metodo": "Efectivo", "motivo": "Consulta",
+                 "observaciones": "ok", "created_at": "2025-04-01 03:25:47", "id": 9, "patient_id": 5}]
+        out = ca._full_rows(rows, "payments_filter")[0]
+        self.assertEqual(out["fecha"], "01/04/2025")
+        self.assertEqual(out["monto"], 100)
+        self.assertIn("observaciones", out)
+
+    def test_full_rows_entidad_generica(self):
+        # entidad sin _FULL_COLS → vista genérica: todos los escalares menos ruido
+        rows = [{"id": 1, "created_at": "x", "nota": "control", "tipo": "general",
+                 "cita": {"obj": 1}}]
+        out = ca._full_rows(rows, "notas_by_cita")[0]
+        self.assertNotIn("id", out)
+        self.assertNotIn("created_at", out)
+        self.assertNotIn("cita", out)  # objeto anidado se omite
+        self.assertEqual(out["nota"], "control")
+        self.assertEqual(out["tipo"], "general")
+
     def test_full_rows_paciente_trae_todos_los_campos(self):
         rows = [{
             "nombre": "Alessandra Giorgio", "ci": "00030", "sexo": "Femenino",

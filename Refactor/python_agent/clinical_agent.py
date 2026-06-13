@@ -773,6 +773,10 @@ _COMPACT_COLS = {
         ("patient_nombre", "paciente"), ("fecha", "fecha"),
         ("motivo", "motivo"), ("diagnostico", "diagnostico"),
     ],
+    "payments": [
+        ("created_at", "fecha"), ("monto", "monto"), ("metodo", "metodo"),
+        ("motivo", "motivo"), ("saldo", "saldo"),
+    ],
 }
 
 
@@ -845,20 +849,46 @@ _FULL_COLS = {
         ("diagnostico", "diagnostico"), ("conducta", "conducta"), ("comentarios", "comentarios"),
         ("peso", "peso"), ("altura", "altura"), ("temperatura", "temperatura"),
     ],
+    "payments": [
+        ("created_at", "fecha"), ("monto", "monto"), ("saldo", "saldo"),
+        ("metodo", "metodo"), ("motivo", "motivo"), ("observaciones", "observaciones"),
+    ],
+}
+
+# Campos internos/ruido que NO se muestran en la vista genérica "todos los datos".
+_NOISE_FIELDS = {
+    "id", "person_id", "created_at", "updated_at", "deleted_at", "pivot", "perfil",
+    "edad", "edad_meses", "tiene_seguro", "tiene_telefono", "tiene_estado_civil",
+    "patient_sexo", "patient_edad",
 }
 
 
+def _all_scalar_fields(row: Dict[str, Any]) -> Dict[str, Any]:
+    """Vista genérica: todos los campos escalares (sin objetos anidados ni ruido).
+
+    Fallback para entidades sin _FULL_COLS definido → "todos los datos" igual
+    funciona para CUALQUIER tabla.
+    """
+    out = {}
+    for k, v in row.items():
+        if k in _NOISE_FIELDS or isinstance(v, (dict, list)):
+            continue
+        out[k] = _fmt_cell(k, v)
+    return out
+
+
 def _full_rows(rows: List[Dict[str, Any]], tool_name: str) -> List[Dict[str, Any]]:
-    """Proyecta a TODOS los campos útiles de la entidad (con etiquetas/orden lindo)."""
+    """TODOS los campos de la entidad. Usa _FULL_COLS si existe (lindo); si no,
+    cae a la vista genérica (todos los escalares) → sirve para cualquier tabla."""
     cols = _FULL_COLS.get((tool_name or "").split("_")[0])
-    if not cols:
-        return rows
     out = []
     for r in rows:
-        if isinstance(r, dict):
+        if not isinstance(r, dict):
+            out.append(r)
+        elif cols:
             out.append({label: _fmt_cell(label, r.get(src)) for src, label in cols})
         else:
-            out.append(r)
+            out.append(_all_scalar_fields(r))
     return out
 
 
@@ -899,6 +929,11 @@ _FIELD_VOCAB = {
         "conducta": ("conducta", "conducta"), "fecha": ("fecha", "fecha"),
         "peso": ("peso", "peso"), "altura": ("altura", "altura"),
         "temperatura": ("temperatura", "temperatura"),
+    },
+    "payments": {
+        "monto": ("monto", "monto"), "saldo": ("saldo", "saldo"),
+        "metodo": ("metodo", "metodo"), "motivo": ("motivo", "motivo"),
+        "observaciones": ("observaciones", "observaciones"), "fecha": ("created_at", "fecha"),
     },
 }
 
@@ -3280,7 +3315,7 @@ Devuelve SOLO JSON válido:
         _domain_filter_tool = tool_name in (
             "patient_filter", "person_filter",
             "citas_filter", "citas_by_patient",
-            "payments_filter",
+            "payments_filter", "payments_list", "payments_by_patient",
             "recetas_filter", "recetas_list", "recetas_by_patient",
             "estudios_filter", "estudios_list",
             "visitas_filter", "visitas_list",
@@ -3401,25 +3436,23 @@ Devuelve SOLO JSON válido:
             family = tool_name.split("_")[0]
             known = family in _COMPACT_COLS
             wants_excel = _wants_excel(question)
-            fsel = _extract_field_selection(question, tool_name) if known else None
+            fsel = _extract_field_selection(question, tool_name)
+            fmt_explicit = _explicit_format(question)
             noun = _TOOL_NOUN.get(tool_name, "registros")
 
-            if not known:
-                # Entidades sin vista definida: comportamiento simple (Excel a pedido).
-                excel_b64 = _rows_to_excel_b64(rows, sheet_name=sheet) if wants_excel else None
-
-            elif fsel == "all" and not wants_excel:
-                # "Todos los datos": pocos registros → los mostramos COMPLETOS
-                # (texto o tabla); muchos → preview + Excel (sería ilegible).
+            if fsel == "all":
+                # TODOS los datos (cualquier entidad). Pocos → completo (texto o
+                # tabla); muchos → Excel (una tabla de 20 cols sería ilegible).
                 full = _full_rows(rows, tool_name)
-                if effective_total > 10:
+                want_table = (fmt_explicit == "table") or wants_excel
+                if effective_total > 10 and not want_table:
                     excel_b64 = _rows_to_excel_b64(full, sheet_name=sheet)
-                    rows = _compact_rows(rows, tool_name)
+                    rows = []
                     answer = (
                         f"Encontré {effective_total} {noun}. Son muchos registros — "
-                        f"te dejo el Excel completo con todos los campos."
+                        f"te dejo el Excel completo con todos los campos para descargar."
                     )
-                elif _explicit_format(question) == "table":
+                elif want_table:
                     rows = full
                     excel_b64 = _rows_to_excel_b64(full, sheet_name=sheet)
                 else:
@@ -3430,8 +3463,8 @@ Devuelve SOLO JSON válido:
                 # Datos completos en tabla + Excel completo.
                 excel_b64 = _rows_to_excel_b64(rows, sheet_name=sheet)
 
-            else:
-                # Columnas elegidas o compactas (≤5).
+            elif known:
+                # Columnas elegidas o compactas (≤5), con formato texto/tabla.
                 if isinstance(fsel, list) and fsel:
                     display = [{label: _fmt_cell(label, r.get(src)) for src, label in fsel} for r in rows]
                 else:
@@ -3439,9 +3472,9 @@ Devuelve SOLO JSON válido:
 
                 # Formato: el usuario manda ("en texto"/"en tabla"); si no, regla
                 # automática (≤10 → texto, >10 → tabla).
-                fmt = _explicit_format(question)
-                if fmt is None:
-                    fmt = "text" if (effective_total <= 10 and not _is_count_question(question)) else "table"
+                fmt = fmt_explicit or (
+                    "text" if (effective_total <= 10 and not _is_count_question(question)) else "table"
+                )
 
                 if fmt == "text":
                     # Texto formateado. Si son muchos, mostramos los primeros y avisamos.
@@ -3458,6 +3491,10 @@ Devuelve SOLO JSON válido:
                     # Tabla compacta + Excel descargable de esas columnas.
                     rows = display
                     excel_b64 = _rows_to_excel_b64(display, sheet_name=sheet)
+
+            else:
+                # Entidad sin vista definida y sin "todos": tabla cruda (Excel a pedido).
+                excel_b64 = None
 
         excel_name = (
             f"{tool_name.split('_')[0]}.xlsx"
