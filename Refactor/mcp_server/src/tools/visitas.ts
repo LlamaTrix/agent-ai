@@ -28,16 +28,18 @@ export function registerVisitasTools(server: McpServer) {
         const citaId = args?.citaId ?? preset?.cita_id;
 
         // mode por defecto = "all" (listado global) si no se acota por paciente/cita.
-        const mode =
+        let mode =
           args?.mode ??
           (patientId != null ? "by_patient" : citaId != null ? "by_cita" : "all");
+        // Robustez: si piden by_patient/by_cita pero falta el id, listamos TODAS
+        // (no rompemos con "falta citaId/patientId").
+        if (mode === "by_patient" && patientId == null) mode = "all";
+        if (mode === "by_cita" && citaId == null) mode = "all";
 
         let baseUrl = "";
         if (mode === "by_patient") {
-          if (patientId == null) throw new Error("visitas_filter: falta patientId para mode=by_patient");
           baseUrl = `${API_BASE_URL}/v1/visitas/patient/${encodeURIComponent(String(patientId))}`;
         } else if (mode === "by_cita") {
-          if (citaId == null) throw new Error("visitas_filter: falta citaId para mode=by_cita");
           baseUrl = `${API_BASE_URL}/v1/visitas/${encodeURIComponent(String(citaId))}`;
         } else {
           baseUrl = `${API_BASE_URL}/v1/visitas`;
