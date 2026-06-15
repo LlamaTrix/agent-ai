@@ -199,6 +199,11 @@ class TestDominiosNuevos(unittest.TestCase):
         rows = [{"a": 1, "b": 2}]
         self.assertEqual(ca._compact_rows(rows, "notas_by_cita"), rows)
 
+    def test_wants_latest(self):
+        self.assertTrue(ca._wants_latest("diagnostico de la ultima visita de Hernan"))
+        self.assertTrue(ca._wants_latest("la cita mas reciente"))
+        self.assertFalse(ca._wants_latest("todas las visitas"))
+
     def test_extract_sangre(self):
         self.assertEqual(ca._extract_sangre("pacientes con sangre O+"), "O+")
         self.assertEqual(ca._extract_sangre("tipo de sangre A-"), "A-")

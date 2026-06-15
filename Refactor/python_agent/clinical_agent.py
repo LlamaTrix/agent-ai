@@ -1883,6 +1883,12 @@ def _extract_estudio_tipo(question: str) -> Optional[str]:
     return None
 
 
+def _wants_latest(question: str) -> bool:
+    """"última/último ..." o "más reciente" → nos quedamos con 1 registro (el más nuevo)."""
+    q = _strip_accents_lc(question)
+    return bool(re.search(r"\bultim[oa]s?\b|\bmas\s+reciente\b|\bel\s+reciente\b", q))
+
+
 def _extract_sangre(question: str) -> Optional[str]:
     """"sangre O+" / "tipo de sangre A-" / "grupo sanguineo AB+" → 'O+'/'A-'/... o None."""
     q = _strip_accents_lc(question)
@@ -2529,10 +2535,85 @@ class MedicalAgentMCP:
 
         return None
 
+    def _present_list(
+        self, question: str, rows: List[Dict[str, Any]], tool_name: str, noun: str
+    ) -> Dict[str, Any]:
+        """Arma el resultado final para una lista de pacientes (cruces multi-tabla)."""
+        total = len(rows)
+        if total == 0:
+            return {"answer": f"No encontré {noun}.", "data": {"rows": [], "row_count": 0}, "steps": 2}
+        display = _compact_rows(rows, tool_name)
+        sheet = tool_name.split("_")[0].capitalize()
+        if total <= 10 and not _wants_excel(question):
+            return {
+                "answer": _format_rows_as_text(display, noun, total),
+                "data": {"rows": [], "row_count": total}, "steps": 2,
+            }
+        excel = _rows_to_excel_b64(rows if _wants_excel(question) else display, sheet_name=sheet)
+        return {
+            "answer": f"Encontré {total} {noun}.",
+            "data": {"rows": display, "row_count": total}, "steps": 2,
+            "excel_bytes": excel, "excel_name": f"{sheet}.xlsx" if excel else None,
+        }
+
+    async def _cross_table_query(self, question: str) -> Optional[Dict[str, Any]]:
+        """Consultas que cruzan tablas (determinístico, sin LLM). None si no aplica."""
+        q = _strip_accents_lc(question)
+        if re.search(r"\bpacientes?\s+sin\s+recetas?\b", q):
+            return await self._patients_without_recetas(question)
+        m = re.search(r"no\s+vien\w+\s+(?:hace\s+)?(?:mas\s+de\s+)?(\d+)\s+(an[oi]s?|meses)", q)
+        if m and "paciente" in q:
+            return await self._patients_inactive(question, int(m.group(1)), m.group(2))
+        return None
+
+    async def _patients_without_recetas(self, question: str) -> Dict[str, Any]:
+        try:
+            rec_rows = _unwrap_rows(await self.tools.call("recetas_list", {}))
+        except Exception:
+            rec_rows = []
+        con_recetas = set()
+        for r in rec_rows:
+            v = r.get("visita") if isinstance(r.get("visita"), dict) else {}
+            pid = v.get("patient_id") or (v.get("patient") or {}).get("id")
+            if pid is not None:
+                con_recetas.add(str(pid))
+        pat_rows = _unwrap_rows(await self.tools.call("patient_filter", {"limit": MAX_RESULT_LIMIT}))
+        sin = [_flatten_patient_row(p) for p in pat_rows if str(p.get("id")) not in con_recetas]
+        return self._present_list(question, sin, "patient_filter", "pacientes sin recetas")
+
+    async def _patients_inactive(self, question: str, n: int, unit: str) -> Dict[str, Any]:
+        from datetime import timedelta
+        try:
+            today = datetime.now(ZoneInfo("America/La_Paz")).date()
+        except Exception:
+            today = datetime.now().date()
+        days = n * 365 if unit.startswith("an") else n * 30
+        cutoff = (today - timedelta(days=days)).strftime("%Y-%m-%d")
+
+        citas = _unwrap_rows(await self.tools.call("citas_filter", {"limit": MAX_RESULT_LIMIT}))
+        last: Dict[str, str] = {}
+        for c in citas:
+            pid = str(c.get("patient_id") or "")
+            f = str(c.get("fecha") or "")[:10]
+            if pid and f and (pid not in last or f > last[pid]):
+                last[pid] = f
+        pat_rows = _unwrap_rows(await self.tools.call("patient_filter", {"limit": MAX_RESULT_LIMIT}))
+        inact = [
+            _flatten_patient_row(p) for p in pat_rows
+            if last.get(str(p.get("id"))) and last[str(p.get("id"))] < cutoff
+        ]
+        unidad = "años" if unit.startswith("an") else "meses"
+        return self._present_list(question, inact, "patient_filter", f"pacientes que no vienen hace más de {n} {unidad}")
+
     async def query(
         self,
         question: str,
     ) -> Dict[str, Any]:
+
+        # Cruces multi-tabla determinísticos (pacientes sin recetas, inactivos…).
+        cross = await self._cross_table_query(question)
+        if cross is not None:
+            return cross
 
         # =====================================================
         # PASO 1 — PLANIFICAR
@@ -3377,6 +3458,23 @@ Devuelve SOLO JSON válido:
             if isinstance(mcp_total, int)
             else len(rows)
         )
+
+        # "última/más reciente <visita/cita/orden/receta>" → nos quedamos con el
+        # registro más nuevo (ordenamos por fecha desc y tomamos 1).
+        if (
+            _wants_latest(question)
+            and rows
+            and tool_name in (
+                "visitas_filter", "visitas_list", "visitas_by_patient", "visitas_by_cita",
+                "citas_filter", "citas_list", "citas_by_patient",
+                "estudios_filter", "estudios_list", "estudios_by_patient", "estudios_by_cita",
+                "recetas_filter", "recetas_list", "recetas_by_patient",
+            )
+        ):
+            rows.sort(key=lambda r: str((r or {}).get("fecha") or ""), reverse=True)
+            rows = rows[:1]
+            effective_total = 1
+            _log("[LATEST] me quedo con el registro más reciente")
 
         # =====================================================
         # "DATOS COMPLETOS" de UN paciente → traer también sus ANTECEDENTES
