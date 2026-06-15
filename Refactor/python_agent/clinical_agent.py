@@ -1889,6 +1889,29 @@ def _wants_latest(question: str) -> bool:
     return bool(re.search(r"\bultim[oa]s?\b|\bmas\s+reciente\b|\bel\s+reciente\b", q))
 
 
+_DX_OR_STOP = {
+    "seguro", "telefono", "celular", "sangre", "recetas", "receta", "citas", "cita",
+    "alergias", "alergia", "ordenes", "estudios", "pagos", "saldo", "genero", "sexo",
+    "edad", "peso", "altura", "diagnostico", "diagnosticos", "antecedentes",
+}
+
+
+def _extract_diagnostico_or(question: str) -> Optional[List[str]]:
+    """"con bronquitis o (con) diarrea" → ['bronquitis','diarrea'] (diagnósticos OR).
+
+    Vocabulario abierto: capturamos las dos palabras alrededor de "o" tras "con",
+    descartando palabras que son filtros conocidos (seguro, sangre, etc.).
+    """
+    q = _strip_accents_lc(question)
+    m = re.search(r"\bcon\s+([a-z]{4,})\s+o\s+(?:con\s+)?([a-z]{4,})", q)
+    if not m:
+        return None
+    a, b = m.group(1), m.group(2)
+    if a in _DX_OR_STOP or b in _DX_OR_STOP:
+        return None
+    return [a, b]
+
+
 def _extract_sangre(question: str) -> Optional[str]:
     """"sangre O+" / "tipo de sangre A-" / "grupo sanguineo AB+" → 'O+'/'A-'/... o None."""
     q = _strip_accents_lc(question)
@@ -2574,7 +2597,33 @@ class MedicalAgentMCP:
             and _extract_antecedent_patient_filters(question)
         ):
             return await self._patients_cita_and_clinical(question)
+        # #13: pacientes con <dx1> o <dx2> (diagnósticos, OR)
+        dxs = _extract_diagnostico_or(question)
+        if dxs and re.search(r"\bpaciente|\bcuant|\bdiagnostic", q):
+            return await self._patients_by_diagnosticos(question, dxs)
         return None
+
+    async def _patients_by_diagnosticos(self, question: str, dxs: List[str]) -> Dict[str, Any]:
+        date_filters = (
+            _extract_month_filter(question, field="fecha")
+            or _extract_relative_date_filter(question, field="fecha")
+            or []
+        )
+        visitas = _unwrap_rows(await self.tools.call(
+            "visitas_filter", {"filters": date_filters, "limit": MAX_RESULT_LIMIT}
+        ))
+        pids = set()
+        for v in visitas:
+            text = _strip_accents_lc(f"{v.get('diagnostico') or ''} {v.get('motivo') or ''}")
+            if any(t in text for t in dxs) and v.get("patient_id") is not None:
+                pids.add(str(v.get("patient_id")))
+        n = len(pids)
+        etiqueta = " o ".join(dxs)
+        if n == 0:
+            return {"answer": f"No encontré pacientes con {etiqueta}.",
+                    "data": {"rows": [], "row_count": 0}, "steps": 2}
+        return {"answer": f"Hay {n} pacientes con {etiqueta}.",
+                "data": {"rows": [], "row_count": n}, "steps": 2}
 
     async def _patients_no_show(self, question: str) -> Dict[str, Any]:
         try:

@@ -199,6 +199,13 @@ class TestDominiosNuevos(unittest.TestCase):
         rows = [{"a": 1, "b": 2}]
         self.assertEqual(ca._compact_rows(rows, "notas_by_cita"), rows)
 
+    def test_extract_diagnostico_or(self):
+        self.assertEqual(ca._extract_diagnostico_or("cuantos pacientes con bronquitis o con diarrea"), ["bronquitis", "diarrea"])
+        self.assertEqual(ca._extract_diagnostico_or("pacientes con gripe o resfrio"), ["gripe", "resfrio"])
+        # filtros conocidos NO son diagnósticos
+        self.assertIsNone(ca._extract_diagnostico_or("pacientes con seguro o con telefono"))
+        self.assertIsNone(ca._extract_diagnostico_or("pacientes con sangre o positivo"))
+
     def test_wants_latest(self):
         self.assertTrue(ca._wants_latest("diagnostico de la ultima visita de Hernan"))
         self.assertTrue(ca._wants_latest("la cita mas reciente"))
