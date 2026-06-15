@@ -251,6 +251,7 @@ OPERADORES de filtro: eq, neq, gt, gte, lt, lte, contains, startsWith, endsWith,
 - Para "órdenes/estudios/laboratorio/gabinete/ecocardiograma" → estudios_filter (preset.tipo=Laboratorio|Analisis de Gabinete|Gabinete Cardiologico)
 - Para "recetas/medicamentos recetados/prescripciones" → recetas_filter (NUNCA medicamentos, que es solo el catálogo)
 - Para "atenciones/visitas/atendidos" → visitas_filter
+- Para "pacientes con sangre O+/A-/...", "con alergias", "con peso entre X e Y" → antecedents_filter (la sangre/peso/alergias viven en antecedents; el sistema arma el preset). Devuelve los pacientes que cumplen.
 - "recetas de <medicamento>" (ej. "recetas de paracetamol") → recetas_filter con preset.nombre=<medicamento>
 - "recetas del paciente <nombre>" o "qué le recetaron a <nombre>" → recetas_filter con patient_id=<nombre>
 - En estos 3 (estudios/recetas/visitas): si mencionan un paciente por nombre pon patient_id=<nombre> y el sistema lo resuelve; el mes/fecha y el tipo los ajusta el sistema automáticamente
@@ -267,7 +268,7 @@ _PLANNER_TOOLS = {
     "estudios_filter", "estudios_list", "estudios_by_patient", "estudios_by_cita",
     "recetas_filter", "recetas_list", "recetas_by_patient", "recetas_by_visita",
     "notas_by_cita", "archivos_by_patient",
-    "antecedents_get",
+    "antecedents_get", "antecedents_filter",
 }
 
 ANALYZER_SYSTEM = """\
@@ -750,6 +751,20 @@ def _flatten_visita_row(row: Dict[str, Any]) -> Dict[str, Any]:
     return out
 
 
+def _flatten_antecedent_row(row: Dict[str, Any]) -> Dict[str, Any]:
+    """Antecedente (de /v1/antecedents): sube el nombre del paciente al raíz y
+    conserva los campos clínicos (sangre, peso, alergias…). Para 'pacientes con sangre X'."""
+    if not isinstance(row, dict):
+        return row
+    patient = row.get("patient") if isinstance(row.get("patient"), dict) else {}
+    persona = patient.get("persona") if isinstance(patient.get("persona"), dict) else {}
+    out = {k: v for k, v in row.items() if k != "patient"}
+    out["patient_nombre"] = " ".join(
+        filter(None, [persona.get("nombre"), persona.get("apellidos")])
+    ) or None
+    return out
+
+
 # Columnas de la vista compacta por defecto (≤5 campos útiles). Con "excel" el
 # usuario recibe TODAS las columnas. Formato: (clave_origen, etiqueta_mostrada).
 _COMPACT_COLS = {
@@ -778,8 +793,9 @@ _COMPACT_COLS = {
         ("motivo", "motivo"), ("saldo", "saldo"),
     ],
     "antecedents": [
-        ("sangre", "sangre"), ("peso", "peso"), ("altura", "altura"),
-        ("alergias_description", "alergias"), ("medicacion_description", "medicacion"),
+        ("patient_nombre", "paciente"), ("sangre", "sangre"), ("peso", "peso"),
+        ("altura", "altura"), ("alergias_description", "alergias"),
+        ("medicacion_description", "medicacion"),
     ],
 }
 
@@ -861,7 +877,7 @@ _FULL_COLS = {
         ("metodo", "metodo"), ("motivo", "motivo"), ("observaciones", "observaciones"),
     ],
     "antecedents": [
-        ("sangre", "sangre"), ("peso", "peso"), ("altura", "altura"),
+        ("patient_nombre", "paciente"), ("sangre", "sangre"), ("peso", "peso"), ("altura", "altura"),
         ("alergias_description", "alergias"), ("medicacion_description", "medicacion"),
         ("enfermedades_description", "enfermedades"), ("quirurgicos_description", "cirugias"),
         ("antecedentespersonales", "antecedentes personales"),
@@ -1849,6 +1865,51 @@ def _extract_estudio_tipo(question: str) -> Optional[str]:
     return None
 
 
+def _extract_sangre(question: str) -> Optional[str]:
+    """"sangre O+" / "tipo de sangre A-" / "grupo sanguineo AB+" → 'O+'/'A-'/... o None."""
+    q = _strip_accents_lc(question)
+    m = re.search(
+        r"\b(?:tipo\s+de\s+)?(?:sangre|sanguineo|grupo)\s+(ab|a|b|o)\s*([+\-]|positiv\w*|negativ\w*)?",
+        q,
+    )
+    if not m:
+        return None
+    grp = m.group(1).upper()
+    sign = m.group(2) or ""
+    if sign.startswith("+") or sign.startswith("positiv"):
+        return f"{grp}+"
+    if sign.startswith("-") or sign.startswith("negativ"):
+        return f"{grp}-"
+    return grp  # sin signo
+
+
+def _extract_antecedent_patient_filters(question: str) -> Optional[Dict[str, Any]]:
+    """Filtros clínicos para 'pacientes con sangre/peso/alergias' → preset de
+    antecedents_filter. None si la pregunta no menciona ninguno."""
+    q = _strip_accents_lc(question)
+    preset: Dict[str, Any] = {}
+
+    sangre = _extract_sangre(question)
+    if sangre:
+        preset["sangre"] = sangre
+
+    if re.search(r"\b(con|tiene[n]?|que\s+tienen|presentan)\s+alergi", q):
+        preset["alergias"] = True
+
+    m = re.search(r"peso\s+(?:mayor|mas)\s+(?:a|de|que)\s+(\d+(?:\.\d+)?)", q)
+    if m:
+        preset["peso_min"] = float(m.group(1))
+    m = re.search(r"peso\s+(?:menor|menos)\s+(?:a|de|que)\s+(\d+(?:\.\d+)?)", q)
+    if m:
+        preset["peso_max"] = float(m.group(1))
+    m = re.search(r"peso\s+entre\s+(\d+(?:\.\d+)?)\s*(?:y|a)\s*(\d+(?:\.\d+)?)", q)
+    if m:
+        lo, hi = sorted([float(m.group(1)), float(m.group(2))])
+        preset["peso_min"], preset["peso_max"] = lo, hi
+
+    return preset or None
+
+
 _DATE_WORDS = {"hoy", "ayer", "manana", "mes", "semana", "este", "esta", "ano", "anio", "dia"}
 
 
@@ -2771,12 +2832,27 @@ class MedicalAgentMCP:
                 _log(f"[CITAS] filtros por paciente inyectados: {cita_extra}")
 
         # =====================================================
+        # PACIENTES por datos CLÍNICOS (sangre/peso/alergias) → viven en la tabla
+        # antecedents. "pacientes con sangre O+" → antecedents_filter (trae el
+        # paciente embebido). No aplica a "antecedentes de <nombre>" (eso es 1 paciente).
+        # =====================================================
+        ant_preset = _extract_antecedent_patient_filters(question)
+        if (
+            ant_preset
+            and "antecedents_filter" in self.tools.allowed_tools
+            and not _extract_patient_name_lookup(question)
+        ):
+            tool_name = "antecedents_filter"
+            args = {"preset": ant_preset}
+            _log(f"[ROUTE] pacientes por clínica → antecedents_filter {ant_preset}")
+
+        # =====================================================
         # DOMINIOS NUEVOS: ÓRDENES (estudios) / RECETAS / ATENCIÓN (visitas)
         # Routing determinístico por keyword: el código elige el tool y arma el
         # tipo/fecha; el nombre de paciente lo resuelve _resolve_patient_id. Las
         # filas del LLM se descartan (solo se conserva su pista de nombre libre).
         # =====================================================
-        if tool_name != "odontogramas" and not _looks_like_odontograma_query(question):
+        if tool_name != "odontogramas" and not _looks_like_odontograma_query(question) and tool_name != "antecedents_filter":
             new_domain = None
             date_field = None
             if _looks_like_receta_query(question):
@@ -3183,6 +3259,9 @@ Devuelve SOLO JSON válido:
         ):
             rows = [_flatten_visita_row(r) for r in rows]
 
+        elif tool_name == "antecedents_filter":
+            rows = [_flatten_antecedent_row(r) for r in rows]
+
         # =====================================================
         # FIX SEGURO / ESTADO CIVIL
         # =====================================================
@@ -3383,6 +3462,7 @@ Devuelve SOLO JSON válido:
             "notas_by_cita": "notas",
             "archivos_by_patient": "archivos",
             "antecedents_get": "antecedentes",
+            "antecedents_filter": "pacientes",
         }
 
         if llm_says_empty and rows:
@@ -3418,6 +3498,7 @@ Devuelve SOLO JSON válido:
             "recetas_filter", "recetas_list", "recetas_by_patient",
             "estudios_filter", "estudios_list",
             "visitas_filter", "visitas_list",
+            "antecedents_filter",
         )
         if (
             (_is_count or _is_list_request(question) or _domain_filter_tool or bool(sort_spec))

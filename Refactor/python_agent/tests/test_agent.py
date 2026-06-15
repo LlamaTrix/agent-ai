@@ -199,6 +199,29 @@ class TestDominiosNuevos(unittest.TestCase):
         rows = [{"a": 1, "b": 2}]
         self.assertEqual(ca._compact_rows(rows, "notas_by_cita"), rows)
 
+    def test_extract_sangre(self):
+        self.assertEqual(ca._extract_sangre("pacientes con sangre O+"), "O+")
+        self.assertEqual(ca._extract_sangre("tipo de sangre A-"), "A-")
+        self.assertEqual(ca._extract_sangre("grupo sanguineo AB positivo"), "AB+")
+        self.assertIsNone(ca._extract_sangre("cuantos pacientes hay"))
+
+    def test_extract_antecedent_patient_filters(self):
+        self.assertEqual(ca._extract_antecedent_patient_filters("pacientes con sangre O+"), {"sangre": "O+"})
+        self.assertEqual(ca._extract_antecedent_patient_filters("pacientes con alergias"), {"alergias": True})
+        self.assertEqual(
+            ca._extract_antecedent_patient_filters("pacientes con peso entre 1 y 2"),
+            {"peso_min": 1.0, "peso_max": 2.0},
+        )
+        self.assertIsNone(ca._extract_antecedent_patient_filters("pacientes mujeres"))
+
+    def test_flatten_antecedent_row(self):
+        row = {"sangre": "O+", "peso": 70, "alergias_description": "Polen",
+               "patient": {"persona": {"nombre": "Ana", "apellidos": "Lopez"}}}
+        out = ca._flatten_antecedent_row(row)
+        self.assertEqual(out["patient_nombre"], "Ana Lopez")
+        self.assertEqual(out["sangre"], "O+")
+        self.assertNotIn("patient", out)
+
     def test_merge_antecedentes(self):
         row = {"nombre": "Jose Araque", "sangre": None}
         ant = {"sangre": "A+", "peso": 70, "altura": 1.75,

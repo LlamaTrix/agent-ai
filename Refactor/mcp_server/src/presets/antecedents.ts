@@ -4,6 +4,11 @@ import type { FilterSpec } from "../filters/pipeline.js";
 export const antecedentsPresetSchema = {
   id: z.union([z.string(), z.number()]).optional(),
   patient_id: z.union([z.string(), z.number()]).optional(),
+  sangre: z.string().optional().describe("Tipo de sangre exacto: O+, A-, AB+, etc."),
+  peso_min: z.number().optional(),
+  peso_max: z.number().optional(),
+  altura_min: z.number().optional(),
+  altura_max: z.number().optional(),
   hta: z.boolean().optional().describe("Hipertension arterial"),
   dm: z.boolean().optional().describe("Diabetes mellitus"),
   alergias: z.boolean().optional(),
@@ -24,6 +29,12 @@ export function buildAntecedentsPresetFilters(preset: any) {
 
   if (preset?.id != null) filters.push({ field: "id", op: "eq", value: preset.id });
   if (preset?.patient_id != null) filters.push({ field: "patient_id", op: "eq", value: preset.patient_id });
+
+  if (preset?.sangre) filters.push({ field: "sangre", op: "eq", value: preset.sangre });
+  if (preset?.peso_min != null) filters.push({ field: "peso", op: "gte", value: preset.peso_min });
+  if (preset?.peso_max != null) filters.push({ field: "peso", op: "lte", value: preset.peso_max });
+  if (preset?.altura_min != null) filters.push({ field: "altura", op: "gte", value: preset.altura_min });
+  if (preset?.altura_max != null) filters.push({ field: "altura", op: "lte", value: preset.altura_max });
 
   const boolTo01 = (b: boolean) => (b ? 1 : 0);
 

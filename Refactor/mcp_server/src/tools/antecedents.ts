@@ -10,12 +10,13 @@ import { antecedentsPresetSchema, buildAntecedentsPresetFilters } from "../prese
 export function registerAntecedentsTools(server: McpServer) {
   server.tool(
     "antecedents_filter",
-    "Filtra antecedentes (tabla antecedents). Usa /v1/antecedents/surgical como listado disponible y filtra local.",
+    "Filtra antecedentes (tabla antecedents) con el paciente embebido. Sirve para " +
+      "filtrar PACIENTES por datos clínicos: sangre (preset.sangre='O+'), peso, altura, alergias, etc.",
     { preset: z.object(antecedentsPresetSchema).optional(), ...filterSchemaBase },
     async (args: any) => {
       if (!API_BASE_URL) return errPayload("antecedents_filter", "API_BASE_URL no está configurado en env.");
       try {
-        const url = addQueryParams(`${API_BASE_URL}/v1/antecedents/surgical`, args?.query);
+        const url = addQueryParams(`${API_BASE_URL}/v1/antecedents`, args?.query);
         const data = await httpGetJson(url);
 
         const presetBuilt = args?.preset
