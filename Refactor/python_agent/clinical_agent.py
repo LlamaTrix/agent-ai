@@ -2941,6 +2941,23 @@ class MedicalAgentMCP:
                 if date_filters:
                     filters_out.extend(date_filters)
 
+                # VISITAS: conservar la búsqueda de diagnóstico/motivo del LLM
+                # ("con otitis media", "diagnóstico de bronquitis"). Es vocabulario
+                # abierto (nombres de enfermedades), por eso lo aporta el LLM.
+                if new_domain == "visitas_filter":
+                    s = args.get("search") if isinstance(args.get("search"), dict) else None
+                    if s and s.get("text"):
+                        clean["search"] = {"text": s["text"], "fields": ["diagnostico", "motivo"]}
+                    else:
+                        for f in (args.get("filters") or []):
+                            if (isinstance(f, dict)
+                                    and f.get("field") in ("diagnostico", "motivo")
+                                    and f.get("value")):
+                                filters_out.append(
+                                    {"field": f["field"], "op": "contains", "value": str(f["value"])}
+                                )
+                                break
+
                 if filters_out:
                     clean["filters"] = filters_out
                 if preset_out:
