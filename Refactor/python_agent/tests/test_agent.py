@@ -214,6 +214,15 @@ class TestDominiosNuevos(unittest.TestCase):
         )
         self.assertIsNone(ca._extract_antecedent_patient_filters("pacientes mujeres"))
 
+    def test_flatten_payment_row(self):
+        row = {"monto": 100, "saldo": 50, "metodo": "QR",
+               "patient": {"persona": {"nombre": "Ana", "apellidos": "Lopez", "telf1": "777"}}}
+        out = ca._flatten_payment_row(row)
+        self.assertEqual(out["patient_nombre"], "Ana Lopez")
+        self.assertEqual(out["telefono"], "777")
+        self.assertEqual(out["saldo"], 50)
+        self.assertNotIn("patient", out)
+
     def test_flatten_antecedent_row(self):
         row = {"sangre": "O+", "peso": 70, "alergias_description": "Polen",
                "patient": {"persona": {"nombre": "Ana", "apellidos": "Lopez"}}}

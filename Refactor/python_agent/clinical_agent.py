@@ -765,6 +765,23 @@ def _flatten_antecedent_row(row: Dict[str, Any]) -> Dict[str, Any]:
     return out
 
 
+def _flatten_payment_row(row: Dict[str, Any]) -> Dict[str, Any]:
+    """Pago (de /v1/payments, trae patient.persona): sube nombre y teléfono del
+    paciente al raíz. Para "nombre/teléfono/monto con saldo por pagar"."""
+    if not isinstance(row, dict):
+        return row
+    patient = row.get("patient") if isinstance(row.get("patient"), dict) else {}
+    persona = patient.get("persona") if isinstance(patient.get("persona"), dict) else {}
+    out = {k: v for k, v in row.items() if k != "patient"}
+    out["patient_nombre"] = " ".join(
+        filter(None, [persona.get("nombre"), persona.get("apellidos")])
+    ) or None
+    out["telefono"] = (
+        persona.get("telf1") or persona.get("telf2") or persona.get("tel_referencia") or None
+    )
+    return out
+
+
 # Columnas de la vista compacta por defecto (≤5 campos útiles). Con "excel" el
 # usuario recibe TODAS las columnas. Formato: (clave_origen, etiqueta_mostrada).
 _COMPACT_COLS = {
@@ -789,8 +806,8 @@ _COMPACT_COLS = {
         ("motivo", "motivo"), ("diagnostico", "diagnostico"),
     ],
     "payments": [
-        ("created_at", "fecha"), ("monto", "monto"), ("metodo", "metodo"),
-        ("motivo", "motivo"), ("saldo", "saldo"),
+        ("patient_nombre", "paciente"), ("created_at", "fecha"), ("monto", "monto"),
+        ("saldo", "saldo"), ("metodo", "metodo"),
     ],
     "antecedents": [
         ("patient_nombre", "paciente"), ("sangre", "sangre"), ("peso", "peso"),
@@ -873,8 +890,9 @@ _FULL_COLS = {
         ("peso", "peso"), ("altura", "altura"), ("temperatura", "temperatura"),
     ],
     "payments": [
-        ("created_at", "fecha"), ("monto", "monto"), ("saldo", "saldo"),
-        ("metodo", "metodo"), ("motivo", "motivo"), ("observaciones", "observaciones"),
+        ("patient_nombre", "paciente"), ("telefono", "telefono"), ("created_at", "fecha"),
+        ("monto", "monto"), ("saldo", "saldo"), ("metodo", "metodo"),
+        ("motivo", "motivo"), ("observaciones", "observaciones"),
     ],
     "antecedents": [
         ("patient_nombre", "paciente"), ("sangre", "sangre"), ("peso", "peso"), ("altura", "altura"),
@@ -2846,6 +2864,17 @@ class MedicalAgentMCP:
             args = {"preset": ant_preset}
             _log(f"[ROUTE] pacientes por clínica → antecedents_filter {ant_preset}")
 
+        # SALDO / deudas → pagos con saldo pendiente (>0). "saldo por pagar",
+        # "que deben", "deudores". (No usamos "pendiente" solo: choca con citas.)
+        elif (
+            re.search(r"\bsaldo\b|\bdeben\b|\bdeuda|\bdeudor|\bpor\s+pagar\b|\badeuda", _strip_accents_lc(question))
+            and "payments_filter" in self.tools.allowed_tools
+            and not _extract_patient_name_lookup(question)
+        ):
+            tool_name = "payments_filter"
+            args = {"filters": [{"field": "saldo", "op": "gt", "value": 0}]}
+            _log("[ROUTE] saldo pendiente → payments_filter saldo>0")
+
         # =====================================================
         # DOMINIOS NUEVOS: ÓRDENES (estudios) / RECETAS / ATENCIÓN (visitas)
         # Routing determinístico por keyword: el código elige el tool y arma el
@@ -3261,6 +3290,9 @@ Devuelve SOLO JSON válido:
 
         elif tool_name == "antecedents_filter":
             rows = [_flatten_antecedent_row(r) for r in rows]
+
+        elif tool_name in ("payments_filter", "payments_list", "payments_by_patient"):
+            rows = [_flatten_payment_row(r) for r in rows]
 
         # =====================================================
         # FIX SEGURO / ESTADO CIVIL
