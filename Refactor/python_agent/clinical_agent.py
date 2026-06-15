@@ -2564,7 +2564,61 @@ class MedicalAgentMCP:
         m = re.search(r"no\s+vien\w+\s+(?:hace\s+)?(?:mas\s+de\s+)?(\d+)\s+(an[oi]s?|meses)", q)
         if m and "paciente" in q:
             return await self._patients_inactive(question, int(m.group(1)), m.group(2))
+        # #11: agendaron y no asistieron → citas pendientes con fecha pasada
+        if re.search(r"no\s+asist|no\s+se\s+presenta|faltaron|no\s+vinieron", q) and re.search(r"\bcita|agenda|paciente", q):
+            return await self._patients_no_show(question)
+        # #8: cita en <periodo> + filtro clínico (peso/sangre/alergias)
+        if (
+            re.search(r"\bcita", q)
+            and (_extract_month_filter(question) or _extract_relative_date_filter(question))
+            and _extract_antecedent_patient_filters(question)
+        ):
+            return await self._patients_cita_and_clinical(question)
         return None
+
+    async def _patients_no_show(self, question: str) -> Dict[str, Any]:
+        try:
+            today = datetime.now(ZoneInfo("America/La_Paz")).date().strftime("%Y-%m-%d")
+        except Exception:
+            today = datetime.now().date().strftime("%Y-%m-%d")
+        citas = _unwrap_rows(await self.tools.call(
+            "citas_filter",
+            {"filters": [{"field": "estado", "op": "eq", "value": "pendiente"}], "limit": MAX_RESULT_LIMIT},
+        ))
+        # "no asistió" ≈ cita pendiente cuya fecha ya pasó (se agendó y no se cerró).
+        pids = {
+            str(c.get("patient_id")) for c in citas
+            if c.get("patient_id") is not None and str(c.get("fecha") or "")[:10] < today
+        }
+        n = len(pids)
+        if n == 0:
+            return {"answer": "No encontré pacientes que hayan agendado y no asistido.",
+                    "data": {"rows": [], "row_count": 0}, "steps": 2}
+        return {"answer": f"Hay {n} pacientes que agendaron una cita y no asistieron (citas pendientes con fecha pasada).",
+                "data": {"rows": [], "row_count": n}, "steps": 2}
+
+    async def _patients_cita_and_clinical(self, question: str) -> Dict[str, Any]:
+        date_filters = (
+            _extract_month_filter(question, field="fecha")
+            or _extract_relative_date_filter(question, field="fecha")
+            or []
+        )
+        citas = _unwrap_rows(await self.tools.call(
+            "citas_filter", {"filters": date_filters, "limit": MAX_RESULT_LIMIT}
+        ))
+        cita_pids = {str(c.get("patient_id")) for c in citas if c.get("patient_id") is not None}
+
+        ant = _unwrap_rows(await self.tools.call(
+            "antecedents_filter",
+            {"preset": _extract_antecedent_patient_filters(question), "limit": MAX_RESULT_LIMIT},
+        ))
+        out, seen = [], set()
+        for a in ant:
+            pid = str(a.get("patient_id") or "")
+            if pid and pid in cita_pids and pid not in seen:
+                seen.add(pid)
+                out.append(_flatten_antecedent_row(a))
+        return self._present_list(question, out, "antecedents_filter", "pacientes")
 
     async def _patients_without_recetas(self, question: str) -> Dict[str, Any]:
         try:
