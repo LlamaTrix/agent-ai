@@ -160,6 +160,10 @@ class TestDominiosNuevos(unittest.TestCase):
         # "pacientes masculinos" no es un nombre
         self.assertIsNone(ca._extract_patient_name_after_keyword("cuántos pacientes masculinos hay"))
         self.assertIsNone(ca._extract_patient_name_after_keyword("cuántas órdenes hay"))
+        # palabras de dominio NO son nombres de paciente (bug: agarraba "recetas")
+        self.assertIsNone(ca._extract_patient_name_after_keyword("dame listado de pacientes con recetas"))
+        self.assertIsNone(ca._extract_patient_name_after_keyword("pacientes que tengan recetas"))
+        self.assertIsNone(ca._extract_patient_name_after_keyword("pacientes con sangre"))
 
     def test_extract_sort_spec_pacientes_por_edad(self):
         # "por edad" en pacientes → ordena por fecha_nacimiento (invertido)

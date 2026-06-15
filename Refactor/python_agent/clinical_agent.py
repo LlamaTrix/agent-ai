@@ -1868,9 +1868,13 @@ _PATIENT_AFTER_STOP = {
     "con", "sin", "por", "mayor", "mayores", "menor", "menores",
     "de", "del", "la", "el", "los", "las", "que", "este", "esta",
     # verbos/relleno que NO son nombres
-    "hay", "tengo", "tiene", "tienen", "hubo", "son", "estan", "esta",
+    "hay", "tengo", "tiene", "tienen", "tenga", "tengan", "hubo", "son", "estan", "esta",
     "registrado", "registrados", "registrada", "registradas",
     "total", "cuantos", "cuantas", "y", "o", "un", "una", "atendidos",
+    # palabras de dominio / filtros (no son nombres de paciente)
+    "receta", "recetas", "cita", "citas", "orden", "ordenes", "estudio", "estudios",
+    "visita", "visitas", "pago", "pagos", "antecedente", "antecedentes",
+    "sangre", "seguro", "telefono", "genero", "edad", "medicamento", "medicamentos",
 }
 
 
@@ -2906,6 +2910,22 @@ class MedicalAgentMCP:
                             "rows": [],
                             "row_count": 0,
                         },
+                        "steps": 2,
+                    }
+
+        # antecedents_get: el {id} es en realidad el patient_id → si vino un
+        # nombre ("antecedentes de herman"), lo resolvemos.
+        if tool_name == "antecedents_get":
+            aid = args.get("id")
+            if aid and not str(aid).isdigit():
+                resolved = await self._resolve_patient_id(str(aid))
+                if resolved:
+                    args["id"] = resolved
+                    _log(f"[RESOLVE] antecedents id '{aid}' → '{resolved}'")
+                else:
+                    return {
+                        "answer": f"No encontré ningún paciente con el nombre '{aid}'.",
+                        "data": {"rows": [], "row_count": 0},
                         "steps": 2,
                     }
 
