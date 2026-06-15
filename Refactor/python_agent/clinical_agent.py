@@ -777,6 +777,10 @@ _COMPACT_COLS = {
         ("created_at", "fecha"), ("monto", "monto"), ("metodo", "metodo"),
         ("motivo", "motivo"), ("saldo", "saldo"),
     ],
+    "antecedents": [
+        ("sangre", "sangre"), ("peso", "peso"), ("altura", "altura"),
+        ("alergias_description", "alergias"), ("medicacion_description", "medicacion"),
+    ],
 }
 
 
@@ -855,6 +859,13 @@ _FULL_COLS = {
     "payments": [
         ("created_at", "fecha"), ("monto", "monto"), ("saldo", "saldo"),
         ("metodo", "metodo"), ("motivo", "motivo"), ("observaciones", "observaciones"),
+    ],
+    "antecedents": [
+        ("sangre", "sangre"), ("peso", "peso"), ("altura", "altura"),
+        ("alergias_description", "alergias"), ("medicacion_description", "medicacion"),
+        ("enfermedades_description", "enfermedades"), ("quirurgicos_description", "cirugias"),
+        ("antecedentespersonales", "antecedentes personales"),
+        ("antecedentesfamiliares", "antecedentes familiares"),
     ],
 }
 
@@ -3100,6 +3111,17 @@ Devuelve SOLO JSON válido:
         # PASO 3 — NORMALIZAR ROWS
         # =====================================================
         rows = _unwrap_rows(raw)
+
+        # antecedents_get devuelve UN objeto (no lista) → lo envolvemos como fila
+        # para que se muestre. {error:...} o vacío → sin antecedentes.
+        if (
+            not rows
+            and tool_name == "antecedents_get"
+            and isinstance(raw, dict)
+            and "error" not in raw
+            and any(raw.get(k) not in (None, "") for k in ("sangre", "peso", "altura", "id"))
+        ):
+            rows = [raw]
 
         # Conteo autoritativo del MCP (universo completo, antes de paginar).
         # Si el tool no lo provee, se cae al número de filas devueltas.
