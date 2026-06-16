@@ -1908,6 +1908,21 @@ def _wants_latest(question: str) -> bool:
     return bool(re.search(r"\bultim[oa]s?\b|\bmas\s+reciente\b|\bel\s+reciente\b", q))
 
 
+def _has_patient_reference(question: str) -> bool:
+    """Referencia a un paciente SIN nombrarlo ("con ella", "sus antecedentes",
+    "ese paciente") → usaremos el último paciente de la conversación (memoria)."""
+    q = _strip_accents_lc(question)
+    return bool(
+        re.search(
+            r"\bcon\s+ella\b|\bcon\s+el\b|\bde\s+ella\b|\bde\s+el\b|\ba\s+ella\b|"
+            r"\bese\s+paciente\b|\besa\s+paciente\b|\bdicho\s+paciente\b|"
+            r"\bel\s+mismo\b|\bla\s+misma\b|\bmismo\s+paciente\b|"
+            r"\bsus\b|\bsu\b",
+            q,
+        )
+    )
+
+
 _DX_OR_STOP = {
     "seguro", "telefono", "celular", "sangre", "recetas", "receta", "citas", "cita",
     "alergias", "alergia", "ordenes", "estudios", "pagos", "saldo", "genero", "sexo",
@@ -2786,7 +2801,12 @@ class MedicalAgentMCP:
     async def query(
         self,
         question: str,
+        context: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
+
+        # Memoria: paciente usado en ESTA consulta (lo lee ask_with_embedded_mcp
+        # para guardarlo en la sesión). Arranca en None.
+        self._used_patient: Optional[Dict[str, Any]] = None
 
         # Cruces multi-tabla determinísticos (pacientes sin recetas, inactivos…).
         cross = await self._cross_table_query(question)
@@ -2804,6 +2824,35 @@ class MedicalAgentMCP:
             plan.get("args") or {},
             question,
         )
+
+        # =====================================================
+        # MEMORIA DE CHAT: "ella / sus / ese paciente" → usar el ÚLTIMO paciente
+        # de la conversación (viene en context). Solo si no nombran a otro.
+        # =====================================================
+        _ctx = context or {}
+        _last_pid = _ctx.get("last_patient_id")
+        _last_pname = _ctx.get("last_patient_name")
+        if (
+            _last_pid
+            and _has_patient_reference(question)
+            and not _extract_patient_name_after_keyword(question)
+            and not _extract_patient_name_lookup(question)
+        ):
+            qn_ref = _strip_accents_lc(question)
+            if re.search(r"antecedent|sangre|alergia|peso|altura", qn_ref):
+                tool_name, args = "antecedents_get", {"id": str(_last_pid)}
+            elif _looks_like_estudio_query(question):
+                tool_name, args = "estudios_filter", {"patient_id": str(_last_pid)}
+            elif _looks_like_receta_query(question):
+                tool_name, args = "recetas_filter", {"patient_id": str(_last_pid)}
+            elif _looks_like_visita_query(question):
+                tool_name, args = "visitas_filter", {"patientId": str(_last_pid)}
+            elif "pago" in qn_ref:
+                tool_name, args = "payments_by_patient", {"patientId": str(_last_pid)}
+            else:  # citas por defecto
+                tool_name, args = "citas_by_patient", {"patient_id": str(_last_pid)}
+            self._used_patient = {"last_patient_id": _last_pid, "last_patient_name": _last_pname}
+            _log(f"[MEMORIA] referencia → paciente '{_last_pname}' (id {_last_pid}) tool={tool_name}")
 
         cita_id_query = _extract_cita_id_query(question)
         if cita_id_query and (
@@ -3283,6 +3332,10 @@ class MedicalAgentMCP:
                 if resolved:
 
                     args[id_field] = resolved
+                    self._used_patient = {
+                        "last_patient_id": resolved,
+                        "last_patient_name": str(val),
+                    }
 
                     _log(
                         f"[RESOLVE] "
@@ -3313,6 +3366,7 @@ class MedicalAgentMCP:
                 resolved = await self._resolve_patient_id(str(aid))
                 if resolved:
                     args["id"] = resolved
+                    self._used_patient = {"last_patient_id": resolved, "last_patient_name": str(aid)}
                     _log(f"[RESOLVE] antecedents id '{aid}' → '{resolved}'")
                 else:
                     return {
@@ -3530,6 +3584,12 @@ Devuelve SOLO JSON válido:
                     )
                 ]
                 mcp_total = len(rows)  # el total del MCP era de candidatos, no del filtrado
+                # Memoria: si la búsqueda por nombre dio 1 paciente, lo recordamos.
+                if len(rows) == 1 and rows[0].get("id"):
+                    self._used_patient = {
+                        "last_patient_id": rows[0].get("id"),
+                        "last_patient_name": rows[0].get("nombre"),
+                    }
 
         elif tool_name in (
             "citas_filter",
@@ -4036,6 +4096,7 @@ Devuelve SOLO JSON válido:
 
 async def ask_with_embedded_mcp(
     question: str,
+    context: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
 
     node_entry = os.getenv(
@@ -4143,9 +4204,16 @@ async def ask_with_embedded_mcp(
                         answerer_model,
                     )
 
-                    return await agent.query(
-                        question
+                    result = await agent.query(
+                        question,
+                        context=context,
                     )
+                    # Memoria: devolvemos el paciente usado para que la capa HTTP
+                    # lo guarde en la sesión (resolución de "ella/sus").
+                    used = getattr(agent, "_used_patient", None)
+                    if isinstance(result, dict) and used:
+                        result["session"] = used
+                    return result
 
     except TimeoutError:
 

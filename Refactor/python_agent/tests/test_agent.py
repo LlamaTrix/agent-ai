@@ -208,6 +208,13 @@ class TestDominiosNuevos(unittest.TestCase):
         self.assertIsNone(ca._extract_diagnostico_or("pacientes con seguro o con telefono"))
         self.assertIsNone(ca._extract_diagnostico_or("pacientes con sangre o positivo"))
 
+    def test_has_patient_reference(self):
+        self.assertTrue(ca._has_patient_reference("todas las citas con ella"))
+        self.assertTrue(ca._has_patient_reference("quiero ver todos sus antecedentes"))
+        self.assertTrue(ca._has_patient_reference("la ultima cita de ese paciente"))
+        self.assertFalse(ca._has_patient_reference("cuantos pacientes hay"))
+        self.assertFalse(ca._has_patient_reference("citas de abril"))
+
     def test_passes_age(self):
         # "mayores a 30" → fecha_nacimiento < corte (lt)
         flt = [{"field": "persona.fecha_nacimiento", "op": "lt", "value": "1994-06-13"}]

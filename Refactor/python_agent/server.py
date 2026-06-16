@@ -37,6 +37,7 @@ app.add_middleware(
 # -----------------------------
 class Question(BaseModel):
     query: str = Field(..., min_length=1)
+    session_id: Optional[str] = None  # para la memoria de chat ("ella/sus")
 
 class RowsPayload(BaseModel):
     rows: List[Dict[str, Any]] = []
@@ -57,6 +58,13 @@ class AskResponse(BaseModel):
 MAX_CONCURRENT_REQUESTS = int(os.getenv("MAX_CONCURRENT_REQUESTS", "3"))
 _sem = asyncio.Semaphore(MAX_CONCURRENT_REQUESTS)
 
+# -----------------------------
+# Memoria de chat (en memoria, por sesión). Guarda el último paciente mencionado
+# para resolver "ella / sus / ese paciente". Acotada para no crecer infinito.
+# -----------------------------
+_SESSIONS: Dict[str, Dict[str, Any]] = {}
+_SESSIONS_MAX = 500
+
 
 @app.get("/health")
 def health():
@@ -70,8 +78,18 @@ def root():
 async def ask_agent(question: Question):
     async with _sem:
         try:
+            # Memoria: contexto de la sesión (último paciente) para "ella/sus".
+            sid = (question.session_id or "").strip() or None
+            context = _SESSIONS.get(sid) if sid else None
+
             # ✅ Llamada ASYNC directa a tu agente
-            result = await ask_with_embedded_mcp(question.query)
+            result = await ask_with_embedded_mcp(question.query, context=context)
+
+            # Guardar/actualizar el último paciente de la sesión si lo hubo.
+            if sid and isinstance(result, dict) and result.get("session"):
+                if sid not in _SESSIONS and len(_SESSIONS) >= _SESSIONS_MAX:
+                    _SESSIONS.clear()  # corte simple para no crecer infinito
+                _SESSIONS[sid] = result["session"]
 
             explanation = (result.get("answer") or "").strip()
 
