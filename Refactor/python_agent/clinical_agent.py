@@ -1998,13 +1998,13 @@ _PATIENT_AFTER_STOP = {
 
 
 def _extract_patient_name_after_keyword(question: str) -> Optional[str]:
-    """Nombre tras "paciente(s)": "estudios del paciente Luis" → "Luis".
+    """Nombre tras "(del/la/el) paciente <X>" SINGULAR: "estudios del paciente Luis" → "Luis".
 
-    Para órdenes/recetas/visitas cuando dicen "paciente X". Descarta stopwords
-    ("pacientes masculinos" → None). Hasta 3 tokens.
+    OJO: solo "paciente" singular (un paciente concreto). "pacienteS con X" es un
+    FILTRO (ej. "pacientes con otitis media") y NO debe tomar X como nombre.
     """
     m = re.search(
-        r"\bpaciente[s]?\s+(?:llamad[oa]\s+)?"
+        r"\bpaciente\s+(?:llamad[oa]\s+)?"
         r"([A-Za-zÁÉÍÓÚÑáéíóúñ]+(?:\s+[A-Za-zÁÉÍÓÚÑáéíóúñ]+){0,2})",
         question or "",
         re.IGNORECASE,
