@@ -762,7 +762,7 @@ def _flatten_antecedent_row(row: Dict[str, Any]) -> Dict[str, Any]:
     out["patient_nombre"] = " ".join(
         filter(None, [persona.get("nombre"), persona.get("apellidos")])
     ) or None
-    return out
+    return _antecedent_display_fields(out)
 
 
 def _flatten_payment_row(row: Dict[str, Any]) -> Dict[str, Any]:
@@ -811,8 +811,7 @@ _COMPACT_COLS = {
     ],
     "antecedents": [
         ("patient_nombre", "paciente"), ("sangre", "sangre"), ("peso", "peso"),
-        ("altura", "altura"), ("alergias_description", "alergias"),
-        ("medicacion_description", "medicacion"),
+        ("altura", "altura"), ("alergias", "alergias"), ("medicacion", "medicacion"),
     ],
 }
 
@@ -896,8 +895,8 @@ _FULL_COLS = {
     ],
     "antecedents": [
         ("patient_nombre", "paciente"), ("sangre", "sangre"), ("peso", "peso"), ("altura", "altura"),
-        ("alergias_description", "alergias"), ("medicacion_description", "medicacion"),
-        ("enfermedades_description", "enfermedades"), ("quirurgicos_description", "cirugias"),
+        ("alergias", "alergias"), ("medicacion", "medicacion"),
+        ("enfermedades_description", "enfermedades"), ("quirurgicos", "cirugias"),
         ("antecedentespersonales", "antecedentes personales"),
         ("antecedentesfamiliares", "antecedentes familiares"),
     ],
@@ -963,6 +962,25 @@ def _merge_antecedentes(patient_row: Dict[str, Any], ant: Dict[str, Any]) -> Non
     patient_row["alergias"] = _ant_flag(ant, "alergias", "alergias_description")
     patient_row["medicacion"] = _ant_flag(ant, "medicacion", "medicacion_description")
     patient_row["quirurgicos"] = _ant_flag(ant, "quirurgicos", "quirurgicos_description")
+
+
+def _antecedent_display_fields(row: Dict[str, Any]) -> Dict[str, Any]:
+    """Para mostrar antecedentes: los campos sí/no (alergias, medicación, cirugías)
+    quedan como su descripción, o 'Sí'/'No' (NUNCA vacío). Así, si preguntan por
+    alergias y no tiene, aparece 'Alergias: No' en vez de omitirse."""
+    if not isinstance(row, dict):
+        return row
+
+    def _flag(name: str, desc: str) -> str:
+        d = row.get(desc)
+        if d and str(d).strip():
+            return str(d).strip()
+        return "Sí" if row.get(name) else "No"
+
+    row["alergias"] = _flag("alergias", "alergias_description")
+    row["medicacion"] = _flag("medicacion", "medicacion_description")
+    row["quirurgicos"] = _flag("quirurgicos", "quirurgicos_description")
+    return row
 
 
 # Vocabulario término(español) → (clave_origen, etiqueta) por entidad, para que
@@ -2646,13 +2664,6 @@ class MedicalAgentMCP:
     async def _cross_table_query(self, question: str) -> Optional[Dict[str, Any]]:
         """Consultas que cruzan tablas (determinístico, sin LLM). None si no aplica."""
         q = _strip_accents_lc(question)
-        # Vacunas: este backend NO tiene módulo de vacunas → respuesta honesta
-        # (evita rutear raro, p.ej. devolver citas por el 'su' de "su vacuna").
-        if re.search(r"\bvacuna", q):
-            return {
-                "answer": "Por ahora no tengo datos de vacunas en este sistema (están en otro módulo).",
-                "data": {"rows": [], "row_count": 0}, "steps": 1,
-            }
         # #7: pacientes por sangre (+ edad/sexo) CON sus diagnósticos del año.
         if _extract_sangre(question) and re.search(r"diagnostic|consulta", q) and "paciente" in q:
             return await self._patients_blood_demographic_with_diagnoses(question)
@@ -3610,7 +3621,7 @@ Devuelve SOLO JSON válido:
             and "error" not in raw
             and any(raw.get(k) not in (None, "") for k in ("sangre", "peso", "altura", "id"))
         ):
-            rows = [raw]
+            rows = [_antecedent_display_fields(raw)]
 
         # Conteo autoritativo del MCP (universo completo, antes de paginar).
         # Si el tool no lo provee, se cae al número de filas devueltas.

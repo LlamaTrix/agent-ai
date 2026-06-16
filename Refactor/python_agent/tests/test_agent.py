@@ -276,6 +276,16 @@ class TestDominiosNuevos(unittest.TestCase):
         self.assertEqual(out["sangre"], "O+")
         self.assertNotIn("patient", out)
 
+    def test_antecedent_display_fields(self):
+        # sin alergias → "No" (no se omite); con descripción → la descripción
+        r1 = ca._antecedent_display_fields({"alergias": False, "medicacion": True,
+                                            "medicacion_description": "Losartán", "quirurgicos": False})
+        self.assertEqual(r1["alergias"], "No")
+        self.assertEqual(r1["medicacion"], "Losartán")
+        self.assertEqual(r1["quirurgicos"], "No")
+        r2 = ca._antecedent_display_fields({"alergias": True, "alergias_description": ""})
+        self.assertEqual(r2["alergias"], "Sí")  # flag true sin descripción
+
     def test_merge_antecedentes(self):
         row = {"nombre": "Jose Araque", "sangre": None}
         ant = {"sangre": "A+", "peso": 70, "altura": 1.75,
@@ -289,9 +299,12 @@ class TestDominiosNuevos(unittest.TestCase):
         self.assertEqual(row["quirurgicos"], "Apendicectomía")
 
     def test_full_rows_antecedentes(self):
-        rows = [{"sangre": "A+", "peso": 70, "altura": 1.7,
-                 "alergias_description": "Penicilina", "id": 3, "patient_id": 5}]
-        out = ca._full_rows(rows, "antecedents_get")[0]
+        # flujo real: primero se computan los campos sí/no, luego se proyecta
+        row = ca._antecedent_display_fields({
+            "sangre": "A+", "peso": 70, "altura": 1.7,
+            "alergias": True, "alergias_description": "Penicilina", "id": 3, "patient_id": 5,
+        })
+        out = ca._full_rows([row], "antecedents_get")[0]
         self.assertEqual(out["sangre"], "A+")
         self.assertEqual(out["alergias"], "Penicilina")
         self.assertNotIn("id", out)
