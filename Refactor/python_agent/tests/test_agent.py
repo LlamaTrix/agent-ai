@@ -208,6 +208,20 @@ class TestDominiosNuevos(unittest.TestCase):
         self.assertIsNone(ca._extract_diagnostico_or("pacientes con seguro o con telefono"))
         self.assertIsNone(ca._extract_diagnostico_or("pacientes con sangre o positivo"))
 
+    def test_bare_list_followup(self):
+        self.assertTrue(ca._is_bare_list_followup("dame la lista"))
+        self.assertTrue(ca._is_bare_list_followup("muestralos"))
+        self.assertTrue(ca._is_bare_list_followup("quiero la lista"))
+        # consulta completa (trae criterio) NO es follow-up
+        self.assertFalse(ca._is_bare_list_followup("dame la lista de pacientes con bronquitis"))
+        self.assertFalse(ca._is_bare_list_followup("cuantos pacientes hay"))
+
+    def test_to_list_form(self):
+        self.assertEqual(
+            ca._to_list_form("cuantos pacientes con bronquitis o diarrea"),
+            "dame la lista de pacientes con bronquitis o diarrea",
+        )
+
     def test_has_patient_reference(self):
         self.assertTrue(ca._has_patient_reference("todas las citas con ella"))
         self.assertTrue(ca._has_patient_reference("quiero ver todos sus antecedentes"))

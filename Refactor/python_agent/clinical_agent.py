@@ -1908,6 +1908,32 @@ def _wants_latest(question: str) -> bool:
     return bool(re.search(r"\bultim[oa]s?\b|\bmas\s+reciente\b|\bel\s+reciente\b", q))
 
 
+def _is_bare_list_followup(question: str) -> bool:
+    """"dame la lista" / "muéstralos" / "los nombres" SIN criterio propio → se
+    refiere al resultado anterior (ej. después de un conteo)."""
+    q = _strip_accents_lc(question).strip()
+    if not re.search(
+        r"\b(la\s+lista|el\s+listado|los\s+nombres|listalos|list[ae]melos|"
+        r"muestra(?:los|melos)?|mostra(?:los|melos)?|dame\s+los|quiero\s+la\s+lista)\b",
+        q,
+    ):
+        return False
+    # Si trae su propia entidad/criterio, es una consulta completa (no follow-up).
+    if re.search(
+        r"\bpaciente|\bcita|\breceta|\borden|\bestudio|\bvisita|\bpago|\batencion|"
+        r"\bsangre|\bdiagnostic|\bmedicament|\bantecedent",
+        q,
+    ):
+        return False
+    return True
+
+
+def _to_list_form(prev_question: str) -> str:
+    """Convierte la consulta previa (un conteo) en pedido de LISTA."""
+    out = re.sub(r"\bcu[aá]nt[oa]s?\b", "", prev_question or "", flags=re.IGNORECASE)
+    return "dame la lista de " + out.strip(" ,.¿?")
+
+
 def _has_patient_reference(question: str) -> bool:
     """Referencia a un paciente YA mencionado, sin nombrarlo ("con ella",
     "sus antecedentes", "ese paciente") → usar el último paciente (memoria)."""
@@ -2713,18 +2739,27 @@ class MedicalAgentMCP:
         visitas = _unwrap_rows(await self.tools.call(
             "visitas_filter", {"filters": date_filters, "limit": MAX_RESULT_LIMIT}
         ))
-        pids = set()
+        matched: Dict[str, Optional[str]] = {}  # patient_id -> nombre
         for v in visitas:
             text = _strip_accents_lc(f"{v.get('diagnostico') or ''} {v.get('motivo') or ''}")
             if any(t in text for t in dxs) and v.get("patient_id") is not None:
-                pids.add(str(v.get("patient_id")))
-        n = len(pids)
+                pid = str(v.get("patient_id"))
+                if pid not in matched:
+                    persona = ((v.get("patient") or {}).get("persona")) or {}
+                    matched[pid] = " ".join(
+                        filter(None, [persona.get("nombre"), persona.get("apellidos")])
+                    ) or None
+        n = len(matched)
         etiqueta = " o ".join(dxs)
         if n == 0:
             return {"answer": f"No encontré pacientes con {etiqueta}.",
                     "data": {"rows": [], "row_count": 0}, "steps": 2}
-        return {"answer": f"Hay {n} pacientes con {etiqueta}.",
-                "data": {"rows": [], "row_count": n}, "steps": 2}
+        if _is_count_question(question):
+            return {"answer": f"Hay {n} pacientes con {etiqueta}.",
+                    "data": {"rows": [], "row_count": n}, "steps": 2}
+        # Lista (ej. "dame la lista" tras el conteo).
+        rows = [{"paciente": nm} for nm in matched.values()]
+        return self._present_list(question, rows, "report", f"pacientes con {etiqueta}")
 
     async def _patients_no_show(self, question: str) -> Dict[str, Any]:
         try:
@@ -2818,6 +2853,14 @@ class MedicalAgentMCP:
         # Memoria: paciente usado en ESTA consulta (lo lee ask_with_embedded_mcp
         # para guardarlo en la sesión). Arranca en None.
         self._used_patient: Optional[Dict[str, Any]] = None
+
+        # Follow-up "dame la lista" → re-ejecuta la consulta anterior en modo lista.
+        _ctx0 = context or {}
+        if _is_bare_list_followup(question) and _ctx0.get("last_question"):
+            question = _to_list_form(_ctx0["last_question"])
+            _log(f"[FOLLOWUP] 'dame la lista' → re-ejecuto: {question}")
+        # Recordamos la consulta efectiva (para encadenar follow-ups).
+        self._effective_question = question
 
         # Cruces multi-tabla determinísticos (pacientes sin recetas, inactivos…).
         cross = await self._cross_table_query(question)
@@ -4229,11 +4272,19 @@ async def ask_with_embedded_mcp(
                         question,
                         context=context,
                     )
-                    # Memoria: devolvemos el paciente usado para que la capa HTTP
-                    # lo guarde en la sesión (resolución de "ella/sus").
-                    used = getattr(agent, "_used_patient", None)
-                    if isinstance(result, dict) and used:
-                        result["session"] = used
+                    # Memoria: devolvemos lo que la capa HTTP debe guardar en la
+                    # sesión (último paciente para "ella/sus" + última consulta
+                    # para "dame la lista").
+                    if isinstance(result, dict):
+                        sess: Dict[str, Any] = {}
+                        used = getattr(agent, "_used_patient", None)
+                        if used:
+                            sess.update(used)
+                        eff_q = getattr(agent, "_effective_question", None)
+                        if eff_q and not _is_bare_list_followup(eff_q):
+                            sess["last_question"] = eff_q
+                        if sess:
+                            result["session"] = sess
                     return result
 
     except TimeoutError:

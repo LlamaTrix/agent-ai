@@ -85,11 +85,12 @@ async def ask_agent(question: Question):
             # ✅ Llamada ASYNC directa a tu agente
             result = await ask_with_embedded_mcp(question.query, context=context)
 
-            # Guardar/actualizar el último paciente de la sesión si lo hubo.
+            # Guardar/actualizar la sesión (último paciente + última consulta).
+            # Fusionamos para no perder el paciente cuando solo cambia la consulta.
             if sid and isinstance(result, dict) and result.get("session"):
                 if sid not in _SESSIONS and len(_SESSIONS) >= _SESSIONS_MAX:
                     _SESSIONS.clear()  # corte simple para no crecer infinito
-                _SESSIONS[sid] = result["session"]
+                _SESSIONS[sid] = {**_SESSIONS.get(sid, {}), **result["session"]}
 
             explanation = (result.get("answer") or "").strip()
 
