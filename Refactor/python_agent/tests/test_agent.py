@@ -259,6 +259,29 @@ class TestDominiosNuevos(unittest.TestCase):
         )
         self.assertIsNone(ca._extract_antecedent_patient_filters("pacientes mujeres"))
 
+    def test_clinical_single_patient(self):
+        # Pregunta de UN paciente nombrado → devuelve el nombre (antecedents_get).
+        self.assertEqual(ca._extract_clinical_single_patient("Isabella tiene alergias?"), "Isabella")
+        self.assertEqual(
+            ca._extract_clinical_single_patient("quiero los antecedentes de Hernan Olaechea"),
+            "Hernan Olaechea",
+        )
+        self.assertEqual(
+            ca._extract_clinical_single_patient(
+                "quiero saber el tipo de sangre y alergias que tiene Alessandra"
+            ),
+            "Alessandra",
+        )
+        # Consultas de LISTA / conteo → None (van a antecedents_filter).
+        self.assertIsNone(ca._extract_clinical_single_patient("pacientes con alergias"))
+        self.assertIsNone(ca._extract_clinical_single_patient("cuantos pacientes con alergias hay"))
+        self.assertIsNone(
+            ca._extract_clinical_single_patient("listado de pacientes tipo de sangre O+ mayores a 30")
+        )
+        self.assertIsNone(ca._extract_clinical_single_patient("quiero ver todos sus antecedentes"))
+        # Sin término clínico → None.
+        self.assertIsNone(ca._extract_clinical_single_patient("Isabella tiene citas"))
+
     def test_flatten_payment_row(self):
         row = {"monto": 100, "saldo": 50, "metodo": "QR",
                "patient": {"persona": {"nombre": "Ana", "apellidos": "Lopez", "telf1": "777"}}}

@@ -2039,6 +2039,64 @@ def _extract_antecedent_patient_filters(question: str) -> Optional[Dict[str, Any
     return preset or None
 
 
+_CLINICAL_TERM_RE = re.compile(
+    r"alergi|antecedent|sangre|grupo\s+sangu|medicaci|medicament|cirug|quirurgic|altura|\bpeso\b",
+    re.IGNORECASE,
+)
+# Tokens que NUNCA son un nombre de paciente en una pregunta clínica.
+_CLINICAL_NAME_STOP = _PATIENT_LOOKUP_STOP | {
+    "alergias", "alergia", "antecedentes", "antecedente", "sangre", "grupo",
+    "sanguineo", "sanguinea", "medicacion", "medicamentos", "medicamento",
+    "cirugias", "cirugia", "quirurgicos", "peso", "altura", "vacuna", "vacunas",
+    "cual", "cuales", "datos", "ficha", "saber", "quiero", "dime", "muestrame",
+    "tipo", "el", "la", "su", "sus",
+}
+
+
+def _extract_clinical_single_patient(question: str) -> Optional[str]:
+    """Pregunta clínica sobre UN paciente nombrado → su nombre.
+
+    Ej: "Isabella tiene alergias?", "alergias de Juan", "qué sangre tiene María".
+    Devuelve None si es una consulta de LISTA ("pacientes con alergias",
+    "cuántos…", "listado…") o si no menciona ningún dato clínico. Sirve para rutear
+    a antecedents_get (1 paciente, responde Sí/No) en vez de antecedents_filter
+    (lista de pacientes)."""
+    q = _strip_accents_lc(question or "")
+    # Lista / conteo → NO es un paciente puntual (eso va a antecedents_filter).
+    if re.search(r"\bpacientes?\b|\bcuant|\blistad|\blista\b|\btodos\b|\btodas\b", q):
+        return None
+    if not _CLINICAL_TERM_RE.search(q):
+        return None
+
+    raw = (question or "").strip().rstrip("?").strip()
+    name_re = r"([a-záéíóúüñ]+(?:\s+[a-záéíóúüñ]+){0,3})"
+    cand = None
+    # 1) "<nombre> tiene/tienen/presenta ..."  ("Isabella tiene alergias")
+    m = re.match(rf"^{name_re}\s+(?:tiene[n]?|presenta|tuvo)\b", raw, re.IGNORECASE)
+    if m:
+        cand = m.group(1)
+    # 2) "... de <nombre>" al final  ("alergias de Juan Perez")
+    if cand is None:
+        m = re.search(rf"\bde\s+{name_re}\s*$", raw, re.IGNORECASE)
+        if m:
+            cand = m.group(1)
+    # 3) "... tiene <nombre>" al final  ("qué sangre tiene María")
+    if cand is None:
+        m = re.search(rf"\btiene[n]?\s+{name_re}\s*$", raw, re.IGNORECASE)
+        if m:
+            cand = m.group(1)
+    if not cand:
+        return None
+
+    cand = cand.strip()
+    tokens = [t for t in cand.split() if t]
+    if not tokens or any(_strip_accents_lc(t) in _CLINICAL_NAME_STOP for t in tokens):
+        return None
+    if len(_strip_accents_lc(cand).replace(" ", "")) < 3:
+        return None
+    return cand
+
+
 _DATE_WORDS = {"hoy", "ayer", "manana", "mes", "semana", "este", "esta", "ano", "anio", "dia"}
 
 
@@ -3237,7 +3295,14 @@ class MedicalAgentMCP:
         # paciente embebido). No aplica a "antecedentes de <nombre>" (eso es 1 paciente).
         # =====================================================
         ant_preset = _extract_antecedent_patient_filters(question)
-        if (
+        clin_name = _extract_clinical_single_patient(question)
+        if clin_name and "antecedents_get" in self.tools.allowed_tools:
+            # Pregunta clínica de UN paciente ("Isabella tiene alergias?") →
+            # antecedents_get de ese paciente (responde Sí/No), NO la lista.
+            tool_name = "antecedents_get"
+            args = {"id": clin_name}
+            _log(f"[ROUTE] clínico de 1 paciente → antecedents_get '{clin_name}'")
+        elif (
             ant_preset
             and "antecedents_filter" in self.tools.allowed_tools
             and not _extract_patient_name_lookup(question)
@@ -3263,7 +3328,7 @@ class MedicalAgentMCP:
         # tipo/fecha; el nombre de paciente lo resuelve _resolve_patient_id. Las
         # filas del LLM se descartan (solo se conserva su pista de nombre libre).
         # =====================================================
-        if tool_name != "odontogramas" and not _looks_like_odontograma_query(question) and tool_name != "antecedents_filter":
+        if tool_name not in ("odontogramas", "antecedents_filter", "antecedents_get") and not _looks_like_odontograma_query(question):
             new_domain = None
             date_field = None
             if _looks_like_receta_query(question):
