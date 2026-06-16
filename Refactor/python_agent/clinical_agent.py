@@ -1909,18 +1909,22 @@ def _wants_latest(question: str) -> bool:
 
 
 def _has_patient_reference(question: str) -> bool:
-    """Referencia a un paciente SIN nombrarlo ("con ella", "sus antecedentes",
-    "ese paciente") → usaremos el último paciente de la conversación (memoria)."""
+    """Referencia a un paciente YA mencionado, sin nombrarlo ("con ella",
+    "sus antecedentes", "ese paciente") → usar el último paciente (memoria)."""
     q = _strip_accents_lc(question)
-    return bool(
-        re.search(
-            r"\bcon\s+ella\b|\bcon\s+el\b|\bde\s+ella\b|\bde\s+el\b|\ba\s+ella\b|"
-            r"\bese\s+paciente\b|\besa\s+paciente\b|\bdicho\s+paciente\b|"
-            r"\bel\s+mismo\b|\bla\s+misma\b|\bmismo\s+paciente\b|"
-            r"\bsus\b|\bsu\b",
-            q,
-        )
-    )
+    # Referencias inequívocas.
+    if re.search(
+        r"\bcon\s+ella\b|\bde\s+ella\b|\ba\s+ella\b|"
+        r"\bese\s+paciente\b|\besa\s+paciente\b|\bdicho\s+paciente\b|"
+        r"\bel\s+mismo\b|\bla\s+misma\b|\bmismo\s+paciente\b",
+        q,
+    ):
+        return True
+    # "su/sus" es AMBIGUO: solo cuenta si NO es una lista de pacientes
+    # ("pacientes con su vacuna" → 'su' es genérico, no el paciente recordado).
+    if re.search(r"\bsus?\b", q) and not re.search(r"\bpacientes\b", q):
+        return True
+    return False
 
 
 _DX_OR_STOP = {
@@ -2616,6 +2620,13 @@ class MedicalAgentMCP:
     async def _cross_table_query(self, question: str) -> Optional[Dict[str, Any]]:
         """Consultas que cruzan tablas (determinístico, sin LLM). None si no aplica."""
         q = _strip_accents_lc(question)
+        # Vacunas: este backend NO tiene módulo de vacunas → respuesta honesta
+        # (evita rutear raro, p.ej. devolver citas por el 'su' de "su vacuna").
+        if re.search(r"\bvacuna", q):
+            return {
+                "answer": "Por ahora no tengo datos de vacunas en este sistema (están en otro módulo).",
+                "data": {"rows": [], "row_count": 0}, "steps": 1,
+            }
         # #7: pacientes por sangre (+ edad/sexo) CON sus diagnósticos del año.
         if _extract_sangre(question) and re.search(r"diagnostic|consulta", q) and "paciente" in q:
             return await self._patients_blood_demographic_with_diagnoses(question)

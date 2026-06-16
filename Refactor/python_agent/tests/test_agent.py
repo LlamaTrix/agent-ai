@@ -214,6 +214,9 @@ class TestDominiosNuevos(unittest.TestCase):
         self.assertTrue(ca._has_patient_reference("la ultima cita de ese paciente"))
         self.assertFalse(ca._has_patient_reference("cuantos pacientes hay"))
         self.assertFalse(ca._has_patient_reference("citas de abril"))
+        # "su/sus" en una LISTA de pacientes NO es referencia (bug Rotavirus)
+        self.assertFalse(ca._has_patient_reference("pacientes que tienen su vacuna de rotavirus"))
+        self.assertFalse(ca._has_patient_reference("pacientes con sus recetas"))
 
     def test_passes_age(self):
         # "mayores a 30" → fecha_nacimiento < corte (lt)
