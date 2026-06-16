@@ -1946,16 +1946,20 @@ def _is_bare_list_followup(question: str) -> bool:
     q = _strip_accents_lc(question).strip()
     if not re.search(
         r"\b(la\s+lista|el\s+listado|los\s+nombres|listalos|list[ae]melos|"
-        r"muestra(?:los|melos)?|mostra(?:los|melos)?|dame\s+los|quiero\s+la\s+lista)\b",
+        r"muestra(?:los|melos)?|mostra(?:los|melos)?|damelos|quiero\s+la\s+lista)\b",
         q,
     ):
         return False
     # Si trae su propia entidad/criterio, es una consulta completa (no follow-up).
     if re.search(
         r"\bpaciente|\bcita|\breceta|\borden|\bestudio|\bvisita|\bpago|\batencion|"
-        r"\bsangre|\bdiagnostic|\bmedicament|\bantecedent",
+        r"\bsangre|\bdiagnostic|\bmedicament|\bantecedent|\bdatos\b|\bficha\b|\bvacun|\balergi",
         q,
     ):
+        return False
+    # Si nombra a un paciente puntual ("dame los datos de isabella"), es una
+    # consulta completa, no un follow-up del resultado anterior.
+    if _extract_patient_name_lookup(question):
         return False
     return True
 

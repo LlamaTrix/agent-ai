@@ -603,6 +603,21 @@ class TestPatientNameLookup(unittest.TestCase):
         self.assertIsNone(ca._extract_patient_name_lookup("datos de las citas de isabella"))
 
 
+class TestBareListFollowup(unittest.TestCase):
+    def test_followups_reales(self):
+        self.assertTrue(ca._is_bare_list_followup("dame la lista"))
+        self.assertTrue(ca._is_bare_list_followup("dámelos"))
+        self.assertTrue(ca._is_bare_list_followup("muéstralos"))
+        self.assertTrue(ca._is_bare_list_followup("dame los nombres"))
+
+    def test_consulta_completa_no_es_followup(self):
+        # "dame los datos de isabella" NO es follow-up (nombra un paciente) → no
+        # debe re-ejecutar la consulta anterior.
+        self.assertFalse(ca._is_bare_list_followup("dame los datos de isabella"))
+        self.assertFalse(ca._is_bare_list_followup("dame la lista de pacientes con vacuna de rotavirus"))
+        self.assertFalse(ca._is_bare_list_followup("muéstrame las citas"))
+
+
 class TestBroadenNameFilter(unittest.TestCase):
     def test_nombre_pasa_a_search_ambos_campos(self):
         out = ca._broaden_name_filter({"filters": [{"field": "persona.nombre", "op": "contains", "value": "olaechea"}]})
