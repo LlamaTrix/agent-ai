@@ -2782,16 +2782,25 @@ class MedicalAgentMCP:
             {"filters": [{"field": "estado", "op": "eq", "value": "pendiente"}], "limit": MAX_RESULT_LIMIT},
         ))
         # "no asistió" ≈ cita pendiente cuya fecha ya pasó (se agendó y no se cerró).
-        pids = {
-            str(c.get("patient_id")) for c in citas
-            if c.get("patient_id") is not None and str(c.get("fecha") or "")[:10] < today
-        }
-        n = len(pids)
+        matched: Dict[str, Optional[str]] = {}  # patient_id -> nombre
+        for c in citas:
+            if c.get("patient_id") is not None and str(c.get("fecha") or "")[:10] < today:
+                pid = str(c.get("patient_id"))
+                if pid not in matched:
+                    persona = ((c.get("patient") or {}).get("persona")) or {}
+                    matched[pid] = " ".join(
+                        filter(None, [persona.get("nombre"), persona.get("apellidos")])
+                    ) or None
+        n = len(matched)
+        noun = "pacientes que agendaron y no asistieron"
         if n == 0:
             return {"answer": "No encontré pacientes que hayan agendado y no asistido.",
                     "data": {"rows": [], "row_count": 0}, "steps": 2}
-        return {"answer": f"Hay {n} pacientes que agendaron una cita y no asistieron (citas pendientes con fecha pasada).",
-                "data": {"rows": [], "row_count": n}, "steps": 2}
+        if _is_count_question(question):
+            return {"answer": f"Hay {n} {noun} (citas pendientes con fecha pasada).",
+                    "data": {"rows": [], "row_count": n}, "steps": 2}
+        rows = [{"paciente": nm} for nm in matched.values()]
+        return self._present_list(question, rows, "report", noun)
 
     async def _patients_cita_and_clinical(self, question: str) -> Dict[str, Any]:
         date_filters = (
