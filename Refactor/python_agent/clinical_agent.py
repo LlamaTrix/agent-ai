@@ -3737,6 +3737,16 @@ Devuelve SOLO JSON válido:
                 except Exception as e:
                     _log(f"[ANTECEDENTES] no se pudieron traer: {repr(e)}")
 
+        # MEMORIA: si la consulta apuntó a UN paciente (ficha o sus citas), lo
+        # recordamos para resolver "ella/sus" después. (Si ya se capturó en la
+        # resolución nombre→id, no lo pisamos.)
+        if self._used_patient is None and len(rows) == 1 and isinstance(rows[0], dict):
+            r0 = rows[0]
+            if tool_name.startswith(("patient", "person")) and r0.get("id"):
+                self._used_patient = {"last_patient_id": r0.get("id"), "last_patient_name": r0.get("nombre")}
+            elif tool_name.startswith("citas") and r0.get("patient_id"):
+                self._used_patient = {"last_patient_id": r0.get("patient_id"), "last_patient_name": r0.get("patient_nombre")}
+
         # =====================================================
         # REPORTE → computamos el agregado en el agente y devolvemos
         # =====================================================
