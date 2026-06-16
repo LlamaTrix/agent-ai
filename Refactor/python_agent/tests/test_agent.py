@@ -595,6 +595,13 @@ class TestPatientNameLookup(unittest.TestCase):
         self.assertIsNone(ca._extract_patient_name_lookup("pacientes solteros"))
         self.assertIsNone(ca._extract_patient_name_lookup("pacientes con seguro alianza"))
 
+    def test_datos_de_nombre_sin_palabra_paciente(self):
+        # "datos/ficha de <nombre>" también es búsqueda por nombre (sin "paciente").
+        self.assertEqual(ca._extract_patient_name_lookup("dame los datos de isabella"), "isabella")
+        self.assertEqual(ca._extract_patient_name_lookup("ficha de hernan olaechea"), "hernan olaechea")
+        # Si menciona otra entidad (citas/pagos), no es búsqueda por nombre.
+        self.assertIsNone(ca._extract_patient_name_lookup("datos de las citas de isabella"))
+
 
 class TestBroadenNameFilter(unittest.TestCase):
     def test_nombre_pasa_a_search_ambos_campos(self):

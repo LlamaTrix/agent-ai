@@ -357,6 +357,14 @@ _PATIENT_LOOKUP_RE = re.compile(
     r"(?:llamad[oa]s?\s+|de\s+nombre\s+|de\s+apellidos?\s+|con\s+apellidos?\s+|con\s+nombre\s+)?"
     r"([a-záéíóúüñ]+(?:\s+[a-záéíóúüñ]+)*)\s*\??$"
 )
+# "datos/ficha/información de <nombre>" (sin la palabra "paciente"): también es una
+# búsqueda por nombre. Ej: "dame los datos de isabella" → "isabella".
+_PATIENT_DATA_LOOKUP_RE = re.compile(
+    r"\b(?:datos|ficha|fichas|info|informaci[oó]n|detalles?)\s+"
+    r"(?:de\s+la\s+|de\s+el\s+|del\s+|de\s+)"
+    r"(?:paciente\s+|sr[a]?\.?\s+)?"
+    r"([a-záéíóúüñ]+(?:\s+[a-záéíóúüñ]+)*)\s*\??$"
+)
 # Si CUALQUIER token capturado es una de estas palabras, no es una búsqueda por nombre.
 _PATIENT_LOOKUP_STOP = {
     "masculino", "masculinos", "femenino", "femeninos", "femenina", "femeninas",
@@ -388,7 +396,8 @@ def _extract_patient_name_lookup(question: str) -> Optional[str]:
         return None
 
     # Extraemos sobre el original (en minúscula) para conservar ñ/acentos.
-    m = _PATIENT_LOOKUP_RE.search((question or "").lower())
+    q_lower = (question or "").lower()
+    m = _PATIENT_LOOKUP_RE.search(q_lower) or _PATIENT_DATA_LOOKUP_RE.search(q_lower)
     if not m:
         return None
 
@@ -2794,7 +2803,39 @@ class MedicalAgentMCP:
         dxs = _extract_diagnostico_or(question)
         if dxs and re.search(r"\bpaciente|\bcuant|\bdiagnostic", q):
             return await self._patients_by_diagnosticos(question, dxs)
+        # Clínico de un paciente NOMBRADO ("Isabella tiene alergias?",
+        # "antecedentes de Hernán"). Si hay varios homónimos, los muestra todos.
+        clin_name = _extract_clinical_single_patient(question)
+        if clin_name and "antecedents_filter" in self.tools.allowed_tools:
+            return await self._clinical_patient_query(question, clin_name)
         return None
+
+    async def _clinical_patient_query(self, question: str, name: str) -> Dict[str, Any]:
+        """Antecedentes (sangre/alergias/medicación…) de un paciente nombrado.
+
+        Filtra antecedents_filter por nombre+apellidos. Si el nombre coincide con
+        VARIOS pacientes (homónimos), los muestra a todos con su dato clínico."""
+        tokens = [t for t in _strip_accents_lc(name).split() if len(t) >= 2]
+        ants = _unwrap_rows(await self.tools.call(
+            "antecedents_filter", {"preset": {}, "limit": MAX_RESULT_LIMIT},
+        ))
+        seen: Dict[str, Dict[str, Any]] = {}
+        for a in ants:
+            persona = ((a.get("patient") or {}).get("persona")) or {}
+            full = _strip_accents_lc(
+                f"{persona.get('nombre') or ''} {persona.get('apellidos') or ''}"
+            )
+            if not tokens or not all(t in full for t in tokens):
+                continue
+            pid = str(a.get("patient_id") or ((a.get("patient") or {}).get("id")) or a.get("id") or "")
+            if pid and pid not in seen:
+                seen[pid] = _flatten_antecedent_row(a)
+        rows = list(seen.values())
+        if not rows:
+            return {"answer": f"No encontré antecedentes de un paciente llamado {name}.",
+                    "data": {"rows": [], "row_count": 0}, "steps": 2}
+        noun = f"antecedentes de {name}" if len(rows) == 1 else f"pacientes llamados {name}"
+        return self._present_list(question, rows, "antecedents", noun)
 
     async def _patients_blood_demographic_with_diagnoses(self, question: str) -> Dict[str, Any]:
         """#7: pacientes con sangre X (+ edad/sexo) y sus diagnósticos de este año.
@@ -3407,14 +3448,7 @@ class MedicalAgentMCP:
         # paciente embebido). No aplica a "antecedentes de <nombre>" (eso es 1 paciente).
         # =====================================================
         ant_preset = _extract_antecedent_patient_filters(question)
-        clin_name = _extract_clinical_single_patient(question)
-        if clin_name and "antecedents_get" in self.tools.allowed_tools:
-            # Pregunta clínica de UN paciente ("Isabella tiene alergias?") →
-            # antecedents_get de ese paciente (responde Sí/No), NO la lista.
-            tool_name = "antecedents_get"
-            args = {"id": clin_name}
-            _log(f"[ROUTE] clínico de 1 paciente → antecedents_get '{clin_name}'")
-        elif (
+        if (
             ant_preset
             and "antecedents_filter" in self.tools.allowed_tools
             and not _extract_patient_name_lookup(question)
