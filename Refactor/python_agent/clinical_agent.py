@@ -269,6 +269,7 @@ _PLANNER_TOOLS = {
     "recetas_filter", "recetas_list", "recetas_by_patient", "recetas_by_visita",
     "notas_by_cita", "archivos_by_patient",
     "antecedents_get", "antecedents_filter",
+    "vacunas_filter",
 }
 
 ANALYZER_SYSTEM = """\
@@ -812,6 +813,10 @@ _COMPACT_COLS = {
     "antecedents": [
         ("patient_nombre", "paciente"), ("sangre", "sangre"), ("peso", "peso"),
         ("altura", "altura"), ("alergias", "alergias"), ("medicacion", "medicacion"),
+    ],
+    "vacunas": [
+        ("paciente", "paciente"), ("vacuna", "vacuna"),
+        ("fecha_aplicacion", "fecha"), ("edad", "edad"), ("sexo", "sexo"),
     ],
 }
 
@@ -2040,7 +2045,7 @@ def _extract_antecedent_patient_filters(question: str) -> Optional[Dict[str, Any
 
 
 _CLINICAL_TERM_RE = re.compile(
-    r"alergi|antecedent|sangre|grupo\s+sangu|medicaci|medicament|cirug|quirurgic|altura|\bpeso\b",
+    r"alergi|antecedent|sangre|grupo\s+sangu|medicaci|medicament|cirug|quirurgic|altura|\bpeso\b|vacun",
     re.IGNORECASE,
 )
 # Tokens que NUNCA son un nombre de paciente en una pregunta clínica.
@@ -2070,31 +2075,73 @@ def _extract_clinical_single_patient(question: str) -> Optional[str]:
 
     raw = (question or "").strip().rstrip("?").strip()
     name_re = r"([a-záéíóúüñ]+(?:\s+[a-záéíóúüñ]+){0,3})"
-    cand = None
-    # 1) "<nombre> tiene/tienen/presenta ..."  ("Isabella tiene alergias")
-    m = re.match(rf"^{name_re}\s+(?:tiene[n]?|presenta|tuvo)\b", raw, re.IGNORECASE)
-    if m:
-        cand = m.group(1)
-    # 2) "... de <nombre>" al final  ("alergias de Juan Perez")
-    if cand is None:
-        m = re.search(rf"\bde\s+{name_re}\s*$", raw, re.IGNORECASE)
-        if m:
-            cand = m.group(1)
-    # 3) "... tiene <nombre>" al final  ("qué sangre tiene María")
-    if cand is None:
-        m = re.search(rf"\btiene[n]?\s+{name_re}\s*$", raw, re.IGNORECASE)
-        if m:
-            cand = m.group(1)
-    if not cand:
-        return None
 
-    cand = cand.strip()
-    tokens = [t for t in cand.split() if t]
-    if not tokens or any(_strip_accents_lc(t) in _CLINICAL_NAME_STOP for t in tokens):
+    def _valid(cand: Optional[str]) -> Optional[str]:
+        if not cand:
+            return None
+        cand = cand.strip()
+        tokens = [t for t in cand.split() if t]
+        if not tokens or any(_strip_accents_lc(t) in _CLINICAL_NAME_STOP for t in tokens):
+            return None
+        if len(_strip_accents_lc(cand).replace(" ", "")) < 3:
+            return None
+        return cand
+
+    # Se prueban en orden; devuelve el PRIMER candidato válido (si el primer
+    # patrón captura algo inválido —p.ej. "que vacunas"— sigue con el siguiente).
+    patterns = [
+        rf"^{name_re}\s+(?:tiene[n]?|presenta|tuvo)\b",   # "Isabella tiene alergias"
+        rf"\bde\s+{name_re}\s*$",                          # "alergias de Juan Perez"
+        rf"\btiene[n]?\s+{name_re}\s*$",                   # "qué sangre tiene María"
+    ]
+    for i, pat in enumerate(patterns):
+        m = re.match(pat, raw, re.IGNORECASE) if i == 0 else re.search(pat, raw, re.IGNORECASE)
+        if m:
+            v = _valid(m.group(1))
+            if v:
+                return v
+    return None
+
+
+def _is_vacuna_query(question: str) -> bool:
+    """True si la pregunta es sobre vacunas (aplicadas)."""
+    return bool(re.search(r"\bvacun", _strip_accents_lc(question or "")))
+
+
+_VACUNA_NAME_STOP = {
+    "aplicada", "aplicadas", "puesta", "puestas", "puesto", "registrada",
+    "registradas", "vencida", "vencidas", "este", "esta", "ano", "anio",
+    "mes", "dia", "que", "tiene", "tienen", "hay",
+}
+
+
+def _extract_vacuna_name(question: str) -> Optional[str]:
+    """Nombre de vacuna en "vacuna de Rotavirus" / "vacuna contra la influenza".
+
+    Devuelve el nombre en minúscula (el filtro contains del MCP es case-insensitive).
+    None si no se nombra ninguna vacuna puntual."""
+    q = _strip_accents_lc(question or "")
+    m = re.search(
+        r"vacunas?\s+(?:de\s+la\s+|de\s+el\s+|de\s+los\s+|del\s+|de\s+|"
+        r"contra\s+(?:el\s+|la\s+|los\s+)?)?([a-z0-9][\w\s\-]*?)\s*\??$",
+        q,
+    )
+    if not m:
         return None
-    if len(_strip_accents_lc(cand).replace(" ", "")) < 3:
+    parts = m.group(1).split()
+    # Si el nombre va precedido por un verbo ("vacunas tiene luisa"), no hay
+    # vacuna nombrada (es la consulta de las vacunas de un paciente).
+    if parts and parts[0] in {
+        "tiene", "tienen", "tuvo", "presenta", "hay", "es", "son",
+        "aplico", "aplicaron", "fue", "esta", "estan",
+    }:
         return None
-    return cand
+    toks = [
+        t for t in parts
+        if t and t not in _VACUNA_NAME_STOP and t not in _MESES and t not in _DATE_WORDS
+    ]
+    name = " ".join(toks).strip()
+    return name if len(name) >= 3 else None
 
 
 _DATE_WORDS = {"hoy", "ayer", "manana", "mes", "semana", "este", "esta", "ano", "anio", "dia"}
@@ -2722,6 +2769,9 @@ class MedicalAgentMCP:
     async def _cross_table_query(self, question: str) -> Optional[Dict[str, Any]]:
         """Consultas que cruzan tablas (determinístico, sin LLM). None si no aplica."""
         q = _strip_accents_lc(question)
+        # Vacunas (aplicadas): "pacientes con vacuna X" / "qué vacunas tiene <paciente>".
+        if _is_vacuna_query(question):
+            return await self._vacunas_query(question)
         # #7: pacientes por sangre (+ edad/sexo) CON sus diagnósticos del año.
         if _extract_sangre(question) and re.search(r"diagnostic|consulta", q) and "paciente" in q:
             return await self._patients_blood_demographic_with_diagnoses(question)
@@ -2798,6 +2848,68 @@ class MedicalAgentMCP:
             row["diagnosticos"] = "; ".join(diag.get(pid, [])) or "—"
             rows.append(row)
         return self._present_list(question, rows, "report", "pacientes")
+
+    async def _vacunas_query(self, question: str) -> Dict[str, Any]:
+        """Vacunas aplicadas (registrovacunas vía vacunas_filter).
+
+        - "pacientes con la vacuna X" → pacientes DISTINTOS (dedup por persona).
+        - "qué vacunas tiene <paciente>" → las vacunas de ese paciente.
+        - "vacunas vencidas" → no calculable (la BD no tiene esquema/calendario)."""
+        q = _strip_accents_lc(question)
+
+        # #18: "vencidas" no es calculable — solo hay vacunas aplicadas, sin calendario.
+        if re.search(r"vencid|caduc|atrasad|al\s+dia|esquema|proxima\s+dosis", q):
+            return {
+                "answer": (
+                    "No puedo determinar vacunas vencidas: la base solo guarda las vacunas "
+                    "ya aplicadas, no un calendario/esquema de vacunación ni la fecha de la "
+                    "próxima dosis. Sí puedo decirte qué pacientes tienen una vacuna "
+                    "específica, o qué vacunas tiene un paciente."
+                ),
+                "data": {"rows": [], "row_count": 0}, "steps": 1,
+            }
+
+        # ¿Las vacunas de UN paciente nombrado? (no es consulta de lista de pacientes)
+        patient_name = None
+        if not re.search(r"\bpacientes?\b|\bquien|\bcuant", q):
+            patient_name = _extract_clinical_single_patient(question)
+
+        if patient_name:
+            rows = _unwrap_rows(await self.tools.call(
+                "vacunas_filter",
+                {"preset": {"paciente": patient_name}, "limit": MAX_RESULT_LIMIT},
+            ))
+            if not rows:
+                return {"answer": f"No encontré vacunas registradas de {patient_name}.",
+                        "data": {"rows": [], "row_count": 0}, "steps": 2}
+            out = [{"vacuna": r.get("vacuna"), "fecha_aplicacion": r.get("fecha_aplicacion"),
+                    "edad": r.get("edad"), "paciente": r.get("paciente")} for r in rows]
+            return self._present_list(question, out, "vacunas", f"vacunas de {patient_name}")
+
+        # Lista de PACIENTES con una vacuna (dedup por persona: varias dosis = 1 paciente).
+        vac = _extract_vacuna_name(question)
+        preset = {"vacuna": vac} if vac else {}
+        rows = _unwrap_rows(await self.tools.call(
+            "vacunas_filter", {"preset": preset, "limit": MAX_RESULT_LIMIT},
+        ))
+        seen: Dict[str, Dict[str, Any]] = {}
+        for r in rows:
+            pid = str(r.get("id_persons") or r.get("paciente") or "")
+            if not pid or pid in seen:
+                continue
+            seen[pid] = {
+                "paciente": r.get("paciente"), "sexo": r.get("sexo"),
+                "vacuna": r.get("vacuna"), "fecha_aplicacion": r.get("fecha_aplicacion"),
+            }
+        out = list(seen.values())
+        noun = f"pacientes con la vacuna {vac}" if vac else "pacientes con vacunas registradas"
+        if not out:
+            return {"answer": f"No encontré {noun}.",
+                    "data": {"rows": [], "row_count": 0}, "steps": 2}
+        if _is_count_question(question):
+            return {"answer": f"Hay {len(out)} {noun}.",
+                    "data": {"rows": [], "row_count": len(out)}, "steps": 2}
+        return self._present_list(question, out, "vacunas", noun)
 
     async def _patients_by_diagnosticos(self, question: str, dxs: List[str]) -> Dict[str, Any]:
         date_filters = (

@@ -282,6 +282,23 @@ class TestDominiosNuevos(unittest.TestCase):
         # Sin término clínico → None.
         self.assertIsNone(ca._extract_clinical_single_patient("Isabella tiene citas"))
 
+    def test_is_vacuna_query(self):
+        self.assertTrue(ca._is_vacuna_query("pacientes con vacuna de Rotavirus"))
+        self.assertTrue(ca._is_vacuna_query("qué vacunas tiene Isabella"))
+        self.assertTrue(ca._is_vacuna_query("pacientes con vacunas vencidas"))
+        self.assertFalse(ca._is_vacuna_query("pacientes con alergias"))
+
+    def test_extract_vacuna_name(self):
+        self.assertEqual(ca._extract_vacuna_name("pacientes con vacuna de Rotavirus"), "rotavirus")
+        self.assertEqual(
+            ca._extract_vacuna_name("quiero listado de pacientes que tienen su vacuna de Rotavirus"),
+            "rotavirus",
+        )
+        self.assertEqual(ca._extract_vacuna_name("quién tiene la vacuna contra la influenza"), "influenza")
+        self.assertEqual(ca._extract_vacuna_name("vacuna de hepatitis b"), "hepatitis b")
+        # Sin vacuna puntual → None.
+        self.assertIsNone(ca._extract_vacuna_name("cuántos pacientes tienen vacuna"))
+
     def test_flatten_payment_row(self):
         row = {"monto": 100, "saldo": 50, "metodo": "QR",
                "patient": {"persona": {"nombre": "Ana", "apellidos": "Lopez", "telf1": "777"}}}
