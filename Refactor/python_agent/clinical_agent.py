@@ -1883,6 +1883,25 @@ def _extract_estudio_tipo(question: str) -> Optional[str]:
     return None
 
 
+def _passes_age(fecha_nac: Any, age_filters: List[Dict[str, Any]]) -> bool:
+    """Chequea una fecha_nacimiento contra los filtros de edad (gt/gte/lt/lte sobre el corte)."""
+    f = str(fecha_nac or "")[:10]
+    if not f:
+        return False
+    for flt in age_filters:
+        op = flt.get("op")
+        v = str(flt.get("value") or "")[:10]
+        if op == "lt" and not (f < v):
+            return False
+        if op == "lte" and not (f <= v):
+            return False
+        if op == "gt" and not (f > v):
+            return False
+        if op == "gte" and not (f >= v):
+            return False
+    return True
+
+
 def _wants_latest(question: str) -> bool:
     """"última/último ..." o "más reciente" → nos quedamos con 1 registro (el más nuevo)."""
     q = _strip_accents_lc(question)
@@ -2582,6 +2601,9 @@ class MedicalAgentMCP:
     async def _cross_table_query(self, question: str) -> Optional[Dict[str, Any]]:
         """Consultas que cruzan tablas (determinístico, sin LLM). None si no aplica."""
         q = _strip_accents_lc(question)
+        # #7: pacientes por sangre (+ edad/sexo) CON sus diagnósticos del año.
+        if _extract_sangre(question) and re.search(r"diagnostic|consulta", q) and "paciente" in q:
+            return await self._patients_blood_demographic_with_diagnoses(question)
         if re.search(r"\bpacientes?\s+sin\s+recetas?\b", q):
             return await self._patients_without_recetas(question)
         m = re.search(r"no\s+vien\w+\s+(?:hace\s+)?(?:mas\s+de\s+)?(\d+)\s+(an[oi]s?|meses)", q)
@@ -2602,6 +2624,59 @@ class MedicalAgentMCP:
         if dxs and re.search(r"\bpaciente|\bcuant|\bdiagnostic", q):
             return await self._patients_by_diagnosticos(question, dxs)
         return None
+
+    async def _patients_blood_demographic_with_diagnoses(self, question: str) -> Dict[str, Any]:
+        """#7: pacientes con sangre X (+ edad/sexo) y sus diagnósticos de este año.
+        Cruza antecedents (sangre) + persona (sexo/edad) + visitas (diagnósticos)."""
+        ant = _unwrap_rows(await self.tools.call(
+            "antecedents_filter",
+            {"preset": _extract_antecedent_patient_filters(question) or {}, "limit": MAX_RESULT_LIMIT},
+        ))
+        sexo = _extract_sexo_positive(question)
+        age_filters = _extract_age_filters(question) or []
+        matched: Dict[str, Dict[str, Any]] = {}
+        for a in ant:
+            patient = a.get("patient") if isinstance(a.get("patient"), dict) else {}
+            persona = patient.get("persona") if isinstance(patient.get("persona"), dict) else {}
+            if sexo and (persona.get("sexo") or "") != sexo:
+                continue
+            if age_filters and not _passes_age(persona.get("fecha_nacimiento"), age_filters):
+                continue
+            pid = str(a.get("patient_id") or patient.get("id") or "")
+            if not pid:
+                continue
+            _, _, edad_txt = _age_details_from_birthdate(persona.get("fecha_nacimiento") or "")
+            matched[pid] = {
+                "paciente": " ".join(filter(None, [persona.get("nombre"), persona.get("apellidos")])) or None,
+                "sexo": persona.get("sexo"),
+                "edad": edad_txt,
+                "sangre": a.get("sangre"),
+            }
+        if not matched:
+            return {"answer": "No encontré pacientes con esas características.",
+                    "data": {"rows": [], "row_count": 0}, "steps": 2}
+
+        try:
+            year = datetime.now(ZoneInfo("America/La_Paz")).year
+        except Exception:
+            year = datetime.now().year
+        visitas = _unwrap_rows(await self.tools.call(
+            "visitas_filter",
+            {"filters": [{"field": "cita.fecha", "op": "contains", "value": str(year)}], "limit": MAX_RESULT_LIMIT},
+        ))
+        diag: Dict[str, List[str]] = {}
+        for v in visitas:
+            pid = str(v.get("patient_id") or "")
+            d = v.get("diagnostico")
+            if pid in matched and d and str(d).strip():
+                diag.setdefault(pid, []).append(str(d).strip())
+
+        rows = []
+        for pid, info in matched.items():
+            row = dict(info)
+            row["diagnosticos"] = "; ".join(diag.get(pid, [])) or "—"
+            rows.append(row)
+        return self._present_list(question, rows, "report", "pacientes")
 
     async def _patients_by_diagnosticos(self, question: str, dxs: List[str]) -> Dict[str, Any]:
         date_filters = (

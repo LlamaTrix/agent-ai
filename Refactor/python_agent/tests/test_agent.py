@@ -208,6 +208,13 @@ class TestDominiosNuevos(unittest.TestCase):
         self.assertIsNone(ca._extract_diagnostico_or("pacientes con seguro o con telefono"))
         self.assertIsNone(ca._extract_diagnostico_or("pacientes con sangre o positivo"))
 
+    def test_passes_age(self):
+        # "mayores a 30" → fecha_nacimiento < corte (lt)
+        flt = [{"field": "persona.fecha_nacimiento", "op": "lt", "value": "1994-06-13"}]
+        self.assertTrue(ca._passes_age("1980-01-01", flt))   # nació antes → mayor
+        self.assertFalse(ca._passes_age("2010-01-01", flt))  # nació después → menor
+        self.assertFalse(ca._passes_age("", flt))            # sin fecha → no pasa
+
     def test_wants_latest(self):
         self.assertTrue(ca._wants_latest("diagnostico de la ultima visita de Hernan"))
         self.assertTrue(ca._wants_latest("la cita mas reciente"))
