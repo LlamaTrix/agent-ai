@@ -1005,6 +1005,38 @@ def _antecedent_display_fields(row: Dict[str, Any]) -> Dict[str, Any]:
     return row
 
 
+def _antecedent_full_display(a: Dict[str, Any]) -> Dict[str, Any]:
+    """Vista COMPLETA de un antecedente (para 'ver todos los antecedentes de X'):
+    todos los campos clínicos relevantes, con su descripción o Sí/No."""
+    if not isinstance(a, dict):
+        return a
+
+    def flag(name: str, desc: str) -> str:
+        d = a.get(desc)
+        if d and str(d).strip():
+            return str(d).strip()
+        return "Sí" if a.get(name) else "No"
+
+    persona = ((a.get("patient") or {}).get("persona")) or {}
+    nombre = " ".join(filter(None, [persona.get("nombre"), persona.get("apellidos")])) or None
+    return {
+        "paciente": nombre,
+        "sangre": a.get("sangre") or "—",
+        "peso": a.get("peso"),
+        "altura": a.get("altura"),
+        "alergias": flag("alergias", "alergias_description"),
+        "medicacion": flag("medicacion", "medicacion_description"),
+        "cirugias": flag("quirurgicos", "quirurgicos_description"),
+        "enfermedades": flag("enfermedades", "enfermedades_description"),
+        "hipertension": flag("hta", "text_hta"),
+        "diabetes": flag("dm", "text_dm"),
+        "fuma": flag("fuma", "text_fuma"),
+        "alcohol": flag("alcohol", "text_alcohol"),
+        "antecedentes personales": a.get("antecedentespersonales") or "—",
+        "antecedentes familiares": a.get("antecedentesfamiliares") or "—",
+    }
+
+
 # Vocabulario término(español) → (clave_origen, etiqueta) por entidad, para que
 # el usuario elija columnas ("con los campos nombre y motivo").
 _FIELD_VOCAB = {
@@ -2855,6 +2887,13 @@ class MedicalAgentMCP:
         # #7: pacientes por sangre (+ edad/sexo) CON sus diagnósticos del año.
         if _extract_sangre(question) and re.search(r"diagnostic|consulta", q) and "paciente" in q:
             return await self._patients_blood_demographic_with_diagnoses(question)
+        # #1: pacientes por sangre/clínica + edad/sexo (SIN diagnóstico). El route
+        # plano de antecedents_filter ignora la edad/sexo → acá sí se aplican.
+        if (_extract_antecedent_patient_filters(question)
+                and "paciente" in q
+                and (_extract_age_filters(question) or _extract_sexo_positive(question))
+                and not re.search(r"\bcita|diagnostic|consulta", q)):
+            return await self._patients_by_blood_demographic(question)
         if re.search(r"\bpacientes?\s+sin\s+recetas?\b", q):
             return await self._patients_without_recetas(question)
         m = re.search(r"no\s+vien\w+\s+(?:hace\s+)?(?:mas\s+de\s+)?(\d+)\s+(an[oi]s?|meses)", q)
@@ -2874,6 +2913,20 @@ class MedicalAgentMCP:
         dxs = _extract_diagnostico_or(question)
         if dxs and re.search(r"\bpaciente|\bcuant|\bdiagnostic", q):
             return await self._patients_by_diagnosticos(question, dxs)
+        # "(todos los) antecedentes de <nombre>" → ficha clínica del paciente,
+        # incluso si dice "todos" (que normalmente marca una lista).
+        m_ant = re.search(
+            r"\bantecedentes?\b.*?\bde\s+(?:la\s+|el\s+|paciente\s+|sr[a]?\.?\s+)?"
+            r"([a-záéíóúüñ]+(?:\s+[a-záéíóúüñ]+){0,3})\s*\??$",
+            (question or "").lower(),
+        )
+        if (m_ant and "antecedents_filter" in self.tools.allowed_tools
+                and not re.search(r"\bpacientes\b", q)):
+            cand = m_ant.group(1).strip()
+            toks = cand.split()
+            if (toks and len(_strip_accents_lc(cand).replace(" ", "")) >= 3
+                    and not any(_strip_accents_lc(t) in _CLINICAL_NAME_STOP for t in toks)):
+                return await self._clinical_patient_query(question, cand)
         # Clínico de un paciente NOMBRADO ("Isabella tiene alergias?",
         # "antecedentes de Hernán"). Si hay varios homónimos, los muestra todos.
         clin_name = _extract_clinical_single_patient(question)
@@ -2891,8 +2944,12 @@ class MedicalAgentMCP:
             "antecedents_filter", {"preset": {}, "limit": MAX_RESULT_LIMIT},
         ))
         seen: Dict[str, Dict[str, Any]] = {}
+        seen_raw: Dict[str, Dict[str, Any]] = {}
         for a in ants:
-            persona = ((a.get("patient") or {}).get("persona")) or {}
+            patient = a.get("patient") if isinstance(a.get("patient"), dict) else {}
+            if patient.get("estado") is False:  # paciente inactivo/eliminado
+                continue
+            persona = patient.get("persona") if isinstance(patient.get("persona"), dict) else {}
             full = _strip_accents_lc(
                 f"{persona.get('nombre') or ''} {persona.get('apellidos') or ''}"
             )
@@ -2901,6 +2958,7 @@ class MedicalAgentMCP:
             pid = str(a.get("patient_id") or ((a.get("patient") or {}).get("id")) or a.get("id") or "")
             if pid and pid not in seen:
                 seen[pid] = _flatten_antecedent_row(a)
+                seen_raw[pid] = a
         rows = list(seen.values())
         if not rows:
             return {"answer": f"No encontré antecedentes de un paciente llamado {name}.",
@@ -2909,6 +2967,11 @@ class MedicalAgentMCP:
         if len(seen) == 1:
             pid = next(iter(seen))
             self._used_patient = {"last_patient_id": pid, "last_patient_name": rows[0].get("patient_nombre")}
+            # Vista COMPLETA (todos los campos) cuando piden "antecedentes/datos/ficha".
+            if re.search(r"antecedent|\btodos?\b|\btoda\b|completos?|\bdatos\b|\bficha\b",
+                         _strip_accents_lc(question)):
+                full_row = _antecedent_full_display(seen_raw[pid])
+                return self._present_list(question, [full_row], "report", f"antecedentes de {name}")
         noun = f"antecedentes de {name}" if len(rows) == 1 else f"pacientes llamados {name}"
         return self._present_list(question, rows, "antecedents", noun)
 
@@ -2924,6 +2987,8 @@ class MedicalAgentMCP:
         matched: Dict[str, Dict[str, Any]] = {}
         for a in ant:
             patient = a.get("patient") if isinstance(a.get("patient"), dict) else {}
+            if patient.get("estado") is False:  # paciente inactivo/eliminado
+                continue
             persona = patient.get("persona") if isinstance(patient.get("persona"), dict) else {}
             if sexo and (persona.get("sexo") or "") != sexo:
                 continue
@@ -2964,6 +3029,46 @@ class MedicalAgentMCP:
             row["diagnosticos"] = "; ".join(diag.get(pid, [])) or "—"
             rows.append(row)
         return self._present_list(question, rows, "report", "pacientes")
+
+    async def _patients_by_blood_demographic(self, question: str) -> Dict[str, Any]:
+        """Pacientes por sangre/alergias/peso + edad/sexo (SIN diagnósticos).
+        Filtra antecedents (clínico) y luego aplica edad/sexo sobre persona."""
+        ant = _unwrap_rows(await self.tools.call(
+            "antecedents_filter",
+            {"preset": _extract_antecedent_patient_filters(question) or {}, "limit": MAX_RESULT_LIMIT},
+        ))
+        sexo = _extract_sexo_positive(question)
+        age_filters = _extract_age_filters(question) or []
+        matched: Dict[str, Dict[str, Any]] = {}
+        for a in ant:
+            patient = a.get("patient") if isinstance(a.get("patient"), dict) else {}
+            if patient.get("estado") is False:  # paciente inactivo/eliminado
+                continue
+            persona = patient.get("persona") if isinstance(patient.get("persona"), dict) else {}
+            if sexo and (persona.get("sexo") or "") != sexo:
+                continue
+            if age_filters and not _passes_age(persona.get("fecha_nacimiento"), age_filters):
+                continue
+            pid = str(a.get("patient_id") or patient.get("id") or "")
+            if not pid or pid in matched:
+                continue
+            _, _, edad_txt = _age_details_from_birthdate(persona.get("fecha_nacimiento") or "")
+            matched[pid] = {
+                "paciente": " ".join(filter(None, [persona.get("nombre"), persona.get("apellidos")])) or None,
+                "sexo": persona.get("sexo"),
+                "edad": edad_txt,
+                "sangre": a.get("sangre"),
+            }
+        rows = list(matched.values())
+        sangre = _extract_sangre(question)
+        noun = "pacientes" + (f" con sangre {sangre}" if sangre else "")
+        if not rows:
+            return {"answer": f"No encontré {noun} con esas características.",
+                    "data": {"rows": [], "row_count": 0}, "steps": 2}
+        if _is_count_question(question):
+            return {"answer": f"Hay {len(rows)} {noun}.",
+                    "data": {"rows": [], "row_count": len(rows)}, "steps": 2}
+        return self._present_list(question, rows, "report", noun)
 
     async def _vacunas_query(self, question: str) -> Dict[str, Any]:
         """Vacunas aplicadas (registrovacunas vía vacunas_filter).
