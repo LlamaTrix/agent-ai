@@ -60,7 +60,15 @@ def _log(msg: str) -> None:
         return
     line = f"[{datetime.now().isoformat(timespec='seconds')}] {msg}"
     if DEBUG_MCP:
-        print(line)
+        # La consola de Windows (cp1252) no puede con caracteres como "→" (U+2192).
+        # El logging NUNCA debe tumbar la petición: si falla, se degrada a ASCII.
+        try:
+            print(line)
+        except Exception:
+            try:
+                print(line.encode("ascii", "replace").decode("ascii"))
+            except Exception:
+                pass
     if MCP_LOG_FILE:
         try:
             with open(MCP_LOG_FILE, "a", encoding="utf-8") as f:
@@ -2966,10 +2974,11 @@ class MedicalAgentMCP:
         if re.search(r"vencid|atrasad|caduc|sin\s+aplicar|le\s+falta[n]?|deber[ií]a", q):
             return await self._vacunas_vencidas(question)
 
-        # ¿Las vacunas de UN paciente nombrado? (no es consulta de lista de pacientes)
+        # ¿Las vacunas de UN paciente? Nombrado explícito o, si es follow-up sin
+        # plural ("y qué vacunas tiene?"), el paciente recordado de la conversación.
         patient_name = None
-        if not re.search(r"\bpacientes?\b|\bquien|\bcuant", q):
-            patient_name = _extract_clinical_single_patient(question)
+        if not re.search(r"\bpacientes?\b|\bquien|\bcuant|\btodos|\btodas|\blistad|\blista\b", q):
+            patient_name = _extract_clinical_single_patient(question) or getattr(self, "_mem_patient_name", None)
 
         if patient_name:
             rows = _unwrap_rows(await self.tools.call(
@@ -3015,9 +3024,10 @@ class MedicalAgentMCP:
         rows = _unwrap_rows(await self.tools.call(
             "vacunas_filter", {"limit": MAX_RESULT_LIMIT}))
 
+        # Paciente: nombre explícito o, si es follow-up sin plural, el recordado.
         patient_name = None
-        if not re.search(r"\bpacientes?\b|\bquien|\bcuant", q):
-            patient_name = _extract_clinical_single_patient(question)
+        if not re.search(r"\bpacientes?\b|\bquien|\bcuant|\btodos|\btodas|\blistad|\blista\b", q):
+            patient_name = _extract_clinical_single_patient(question) or getattr(self, "_mem_patient_name", None)
         ptoks = [t for t in _strip_accents_lc(patient_name or "").split() if len(t) >= 2]
 
         # Agrupar por persona: nombre, fecha de nacimiento, dosis aplicadas.
@@ -3218,6 +3228,10 @@ class MedicalAgentMCP:
             _log(f"[FOLLOWUP] 'dame la lista' → re-ejecuto: {question}")
         # Recordamos la consulta efectiva (para encadenar follow-ups).
         self._effective_question = question
+
+        # Paciente recordado de la conversación (para follow-ups tipo "y qué
+        # vacunas vencidas tiene?" → el último paciente). Lo usan los handlers.
+        self._mem_patient_name: Optional[str] = _ctx0.get("last_patient_name")
 
         # Cruces multi-tabla determinísticos (pacientes sin recetas, inactivos…).
         cross = await self._cross_table_query(question)
