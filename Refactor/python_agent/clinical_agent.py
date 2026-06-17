@@ -2967,8 +2967,9 @@ class MedicalAgentMCP:
         if len(seen) == 1:
             pid = next(iter(seen))
             self._used_patient = {"last_patient_id": pid, "last_patient_name": rows[0].get("patient_nombre")}
-            # Vista COMPLETA (todos los campos) cuando piden "antecedentes/datos/ficha".
-            if re.search(r"antecedent|\btodos?\b|\btoda\b|completos?|\bdatos\b|\bficha\b",
+            # Vista COMPLETA solo si piden "TODOS / completos / toda la ficha".
+            # "antecedentes de X" a secas → vista corta (5 campos).
+            if re.search(r"\btodos?\b|\btoda\b|\btodas\b|completos?|\bcompleta\b|\btoda\s+la\s+ficha\b",
                          _strip_accents_lc(question)):
                 full_row = _antecedent_full_display(seen_raw[pid])
                 return self._present_list(question, [full_row], "report", f"antecedentes de {name}")
