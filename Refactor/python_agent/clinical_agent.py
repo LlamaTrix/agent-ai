@@ -2905,6 +2905,10 @@ class MedicalAgentMCP:
         if not rows:
             return {"answer": f"No encontré antecedentes de un paciente llamado {name}.",
                     "data": {"rows": [], "row_count": 0}, "steps": 2}
+        # Memoria: si es UN solo paciente, recordarlo para follow-ups ("citas con ella").
+        if len(seen) == 1:
+            pid = next(iter(seen))
+            self._used_patient = {"last_patient_id": pid, "last_patient_name": rows[0].get("patient_nombre")}
         noun = f"antecedentes de {name}" if len(rows) == 1 else f"pacientes llamados {name}"
         return self._present_list(question, rows, "antecedents", noun)
 
@@ -2973,6 +2977,10 @@ class MedicalAgentMCP:
         # programada y la vacuna NO está aplicada).
         if re.search(r"vencid|atrasad|caduc|sin\s+aplicar|le\s+falta[n]?|deber[ií]a", q):
             return await self._vacunas_vencidas(question)
+
+        # Negación: "pacientes SIN vacunas (de X)" → los que NO tienen ese registro.
+        if re.search(r"\bsin\s+(?:la\s+|las\s+)?vacun|\bno\s+\w{0,8}\s*vacunad", q):
+            return await self._patients_without_vacunas(question, _extract_vacuna_name(question))
 
         # ¿Las vacunas de UN paciente? Nombrado explícito o, si es follow-up sin
         # plural ("y qué vacunas tiene?"), el paciente recordado de la conversación.
@@ -3087,6 +3095,34 @@ class MedicalAgentMCP:
             return {"answer": f"Hay {len(out)} pacientes con vacunas vencidas.",
                     "data": {"rows": [], "row_count": len(out)}, "steps": 2}
         return self._present_list(question, out, "report", "pacientes con vacunas vencidas")
+
+    async def _patients_without_vacunas(self, question: str, vac: Optional[str] = None) -> Dict[str, Any]:
+        """Pacientes SIN vacunas registradas (o sin una vacuna puntual): los que
+        NO aparecen en registrovacunas (cruce patient.person_id vs id_persons)."""
+        vacc = _unwrap_rows(await self.tools.call(
+            "vacunas_filter",
+            {"preset": {"vacuna": vac} if vac else {}, "limit": MAX_RESULT_LIMIT},
+        ))
+        vacc_persons = {str(r.get("id_persons")) for r in vacc if r.get("id_persons") is not None}
+        patients = _unwrap_rows(await self.tools.call(
+            "patient_filter", {"limit": MAX_RESULT_LIMIT}))
+        out: List[Dict[str, Any]] = []
+        for p in patients:
+            pid = str(p.get("person_id") or ((p.get("persona") or {}).get("id")) or "")
+            if not pid or pid in vacc_persons:
+                continue
+            persona = p.get("persona") if isinstance(p.get("persona"), dict) else {}
+            nm = " ".join(filter(None, [persona.get("nombre"), persona.get("apellidos")])) or None
+            out.append({"paciente": nm})
+        n = len(out)
+        noun = f"pacientes sin la vacuna {vac}" if vac else "pacientes sin vacunas registradas"
+        if n == 0:
+            return {"answer": f"No encontré {noun}.",
+                    "data": {"rows": [], "row_count": 0}, "steps": 2}
+        if _is_count_question(question):
+            return {"answer": f"Hay {n} {noun}.",
+                    "data": {"rows": [], "row_count": n}, "steps": 2}
+        return self._present_list(question, out, "report", noun)
 
     async def _patients_by_diagnosticos(self, question: str, dxs: List[str]) -> Dict[str, Any]:
         date_filters = (
