@@ -23,7 +23,7 @@ export function registerVacunasTools(server: McpServer) {
     async (args: any) => {
       if (!API_BASE_URL) return errPayload("vacunas_filter", "API_BASE_URL no está configurado en env.");
       try {
-        const base = `${API_BASE_URL}/v1/registros-vacunas`;
+        const base = `${API_BASE_URL}/v1/vacunas-aplicadas`;
         const url = addQueryParams(base, args?.query);
         const data = await httpGetJson(url);
 

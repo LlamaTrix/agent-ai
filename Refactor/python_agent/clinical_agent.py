@@ -2157,6 +2157,65 @@ def _extract_vacuna_name(question: str) -> Optional[str]:
     return name if len(name) >= 3 else None
 
 
+# ── Esquema de vacunación (copiado de vaccineCalendarConfig del frontend de
+# Pediatría) ───────────────────────────────────────────────────────────────
+# id de vacuna → columnas de edad en que toca aplicarla. El backend solo guarda
+# vacunas aplicadas; este calendario vive en el front, así que el agente lleva su
+# propia copia para calcular "vencidas" (edad del paciente ≥ edad programada y la
+# vacuna NO aplicada). Las dosis "embarazadas" no entran (no son por edad).
+_VACCINE_NAME_BY_ID = {
+    8: "Tuberculosis (BCG)", 16: "Influenza", 0: "Hepatitis A", 1: "Hepatitis B",
+    2: "Difteria/Tétanos/Tosferina", 3: "Poliomielitis", 4: "Haemophilus influenzae b",
+    5: "Neumococo", 6: "Rotavirus", 7: "Meningococo B", 9: "Meningococo ACWY",
+    10: "Gripe", 12: "Sarampión/Rubéola/Parotiditis", 19: "Fiebre amarilla",
+    13: "Varicela", 14: "VPH", 15: "Virus respiratorio sincitial",
+}
+_VACCINE_SCHEDULE = {
+    8: ["0m"],
+    16: ["6m", "7m", "12m", "2y", "3y", "4y", "5y"],
+    0: ["12m", "18m"],
+    1: ["2m", "4m", "11m"],
+    2: ["2m", "4m", "11m", "6y", "10y", "12y"],
+    3: ["2m", "4m", "11m", "6y"],
+    4: ["2m", "4m", "11m"],
+    5: ["2m", "4m", "6m", "11m"],
+    6: ["2m", "4m", "6m"],
+    7: ["2m", "4m", "12m", "15m", "12y"],
+    9: ["4m", "12m", "12y", "14y", "1518y"],
+    10: ["6m", "11m", "12m", "15m", "2y", "4y"],
+    12: ["12m", "2y"],
+    19: ["12m", "11y"],
+    13: ["15m", "2y"],
+    14: ["10y", "12y"],
+    15: ["0m", "2m", "4m", "6m", "11m"],
+}
+_AGE_COL_MONTHS = {
+    "0m": 0, "2m": 2, "4m": 4, "6m": 6, "7m": 7, "11m": 11, "12m": 12,
+    "15m": 15, "18m": 18, "2y": 24, "3y": 36, "4y": 48, "5y": 60, "6y": 72,
+    "10y": 120, "11y": 132, "12y": 144, "14y": 168, "1518y": 180,
+}
+
+
+def _age_months(fecha_nac: Any) -> Optional[int]:
+    """Edad en meses a partir de la fecha de nacimiento. None si es inválida."""
+    if not fecha_nac:
+        return None
+    m = re.match(r"^(\d{4})-(\d{2})-(\d{2})", str(fecha_nac))
+    if not m:
+        return None
+    y, mo, d = int(m.group(1)), int(m.group(2)), int(m.group(3))
+    if y < 1900 or not (1 <= mo <= 12):
+        return None
+    try:
+        today = datetime.now(ZoneInfo("America/La_Paz")).date()
+    except Exception:
+        today = datetime.now().date()
+    months = (today.year - y) * 12 + (today.month - mo)
+    if today.day < d:
+        months -= 1
+    return months if 0 <= months <= 1500 else None
+
+
 _DATE_WORDS = {"hoy", "ayer", "manana", "mes", "semana", "este", "esta", "ano", "anio", "dia"}
 
 
@@ -2902,17 +2961,10 @@ class MedicalAgentMCP:
         - "vacunas vencidas" → no calculable (la BD no tiene esquema/calendario)."""
         q = _strip_accents_lc(question)
 
-        # #18: "vencidas" no es calculable — solo hay vacunas aplicadas, sin calendario.
-        if re.search(r"vencid|caduc|atrasad|al\s+dia|esquema|proxima\s+dosis", q):
-            return {
-                "answer": (
-                    "No puedo determinar vacunas vencidas: la base solo guarda las vacunas "
-                    "ya aplicadas, no un calendario/esquema de vacunación ni la fecha de la "
-                    "próxima dosis. Sí puedo decirte qué pacientes tienen una vacuna "
-                    "específica, o qué vacunas tiene un paciente."
-                ),
-                "data": {"rows": [], "row_count": 0}, "steps": 1,
-            }
+        # #18: vacunas VENCIDAS (esquema por edad: el paciente ya pasó la edad
+        # programada y la vacuna NO está aplicada).
+        if re.search(r"vencid|atrasad|caduc|sin\s+aplicar|le\s+falta[n]?|deber[ií]a", q):
+            return await self._vacunas_vencidas(question)
 
         # ¿Las vacunas de UN paciente nombrado? (no es consulta de lista de pacientes)
         patient_name = None
@@ -2955,6 +3007,76 @@ class MedicalAgentMCP:
             return {"answer": f"Hay {len(out)} {noun}.",
                     "data": {"rows": [], "row_count": len(out)}, "steps": 2}
         return self._present_list(question, out, "vacunas", noun)
+
+    async def _vacunas_vencidas(self, question: str) -> Dict[str, Any]:
+        """Vacunas vencidas según el esquema por edad: para cada dosis programada
+        cuya edad el paciente ya pasó y que NO tiene aplicada. Por paciente o lista."""
+        q = _strip_accents_lc(question)
+        rows = _unwrap_rows(await self.tools.call(
+            "vacunas_filter", {"limit": MAX_RESULT_LIMIT}))
+
+        patient_name = None
+        if not re.search(r"\bpacientes?\b|\bquien|\bcuant", q):
+            patient_name = _extract_clinical_single_patient(question)
+        ptoks = [t for t in _strip_accents_lc(patient_name or "").split() if len(t) >= 2]
+
+        # Agrupar por persona: nombre, fecha de nacimiento, dosis aplicadas.
+        persons: Dict[str, Dict[str, Any]] = {}
+        for r in rows:
+            pid = str(r.get("id_persons") or "")
+            if not pid:
+                continue
+            if ptoks:
+                full = _strip_accents_lc(str(r.get("paciente") or ""))
+                if not all(t in full for t in ptoks):
+                    continue
+            p = persons.setdefault(pid, {
+                "paciente": r.get("paciente"),
+                "fnac": r.get("fecha_nacimiento"),
+                "applied": set(),
+            })
+            p["applied"].add((str(r.get("id_vacuna")), str(r.get("edad") or "")))
+
+        out: List[Dict[str, Any]] = []
+        for p in persons.values():
+            am = _age_months(p["fnac"])
+            if am is None:
+                continue
+            faltan: List[str] = []
+            for vid, cols in _VACCINE_SCHEDULE.items():
+                for col in cols:
+                    due = _AGE_COL_MONTHS.get(col)
+                    if due is None or am < due:
+                        continue
+                    if (str(vid), col) not in p["applied"]:
+                        faltan.append(f"{_VACCINE_NAME_BY_ID.get(vid, vid)} ({col})")
+            if faltan:
+                out.append({
+                    "paciente": p["paciente"],
+                    "vacunas_vencidas": "; ".join(faltan[:12]),
+                    "cantidad": len(faltan),
+                })
+
+        if not out:
+            if patient_name:
+                return {"answer": f"{patient_name} está al día: no tiene vacunas vencidas "
+                                  f"(según las vacunas registradas y su edad).",
+                        "data": {"rows": [], "row_count": 0}, "steps": 2}
+            return {"answer": "No encontré pacientes con vacunas vencidas.",
+                    "data": {"rows": [], "row_count": 0}, "steps": 2}
+
+        out.sort(key=lambda r: r["cantidad"], reverse=True)
+
+        # Pregunta sobre UN paciente → respuesta directa (puede haber homónimos).
+        if patient_name:
+            lineas = [f"• {r['paciente']}: {r['cantidad']} vencida(s) — {r['vacunas_vencidas']}" for r in out]
+            return {"answer": "Vacunas vencidas:\n" + "\n".join(lineas),
+                    "data": {"rows": out, "row_count": len(out)}, "steps": 2}
+
+        if _is_count_question(question):
+            return {"answer": f"Hay {len(out)} pacientes con vacunas vencidas.",
+                    "data": {"rows": [], "row_count": len(out)}, "steps": 2}
+        return self._present_list(question, out, "report", "pacientes con vacunas vencidas")
 
     async def _patients_by_diagnosticos(self, question: str, dxs: List[str]) -> Dict[str, Any]:
         date_filters = (

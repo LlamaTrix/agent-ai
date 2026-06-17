@@ -299,6 +299,25 @@ class TestDominiosNuevos(unittest.TestCase):
         # Sin vacuna puntual → None.
         self.assertIsNone(ca._extract_vacuna_name("cuántos pacientes tienen vacuna"))
 
+    def test_age_months(self):
+        from datetime import datetime
+        from zoneinfo import ZoneInfo
+        hoy = datetime.now(ZoneInfo("America/La_Paz")).date()
+        # Recién nacido este mes → 0 meses.
+        self.assertEqual(ca._age_months(f"{hoy.year}-{hoy.month:02d}-{hoy.day:02d}"), 0)
+        # Fechas inválidas → None.
+        self.assertIsNone(ca._age_months("0000-00-00"))
+        self.assertIsNone(ca._age_months(None))
+        self.assertIsNone(ca._age_months("texto"))
+        # ~12 meses atrás → 12.
+        self.assertEqual(ca._age_months(f"{hoy.year - 1}-{hoy.month:02d}-{hoy.day:02d}"), 12)
+
+    def test_schedule_consistencia(self):
+        # Toda columna del esquema debe tener su equivalente en meses.
+        for cols in ca._VACCINE_SCHEDULE.values():
+            for col in cols:
+                self.assertIn(col, ca._AGE_COL_MONTHS, f"falta {col} en _AGE_COL_MONTHS")
+
     def test_flatten_payment_row(self):
         row = {"monto": 100, "saldo": 50, "metodo": "QR",
                "patient": {"persona": {"nombre": "Ana", "apellidos": "Lopez", "telf1": "777"}}}
