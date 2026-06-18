@@ -2916,7 +2916,8 @@ class MedicalAgentMCP:
         # "(todos los) antecedentes de <nombre>" → ficha clínica del paciente,
         # incluso si dice "todos" (que normalmente marca una lista).
         m_ant = re.search(
-            r"\bantecedentes?\b.*?\bde\s+(?:la\s+|el\s+|paciente\s+|sr[a]?\.?\s+)?"
+            r"\bantecedentes?\b.*?\b(?:de|que\s+tiene[n]?|tiene[n]?)\s+"
+            r"(?:la\s+|el\s+|paciente\s+|sr[a]?\.?\s+)?"
             r"([a-záéíóúüñ]+(?:\s+[a-záéíóúüñ]+){0,3})\s*\??$",
             (question or "").lower(),
         )
@@ -2927,6 +2928,24 @@ class MedicalAgentMCP:
             if (toks and len(_strip_accents_lc(cand).replace(" ", "")) >= 3
                     and not any(_strip_accents_lc(t) in _CLINICAL_NAME_STOP for t in toks)):
                 return await self._clinical_patient_query(question, cand)
+        # "citas de/con/que tiene <nombre>" → citas de TODOS los pacientes que
+        # coincidan por nombre (homónimos, parcial). No "pacientes con..." (filtro)
+        # ni "con ella" (memoria) ni fechas ("citas de abril").
+        m_cit = re.search(
+            r"\bcitas?\b.*?\b(?:del|de|con|que\s+tiene[n]?|tiene[n]?)\s+"
+            r"(?:la\s+|el\s+|paciente\s+|sr[a]?\.?\s+)?"
+            r"([a-záéíóúüñ]+(?:\s+[a-záéíóúüñ]+){0,3})\s*\??$",
+            (question or "").lower(),
+        )
+        if (m_cit and "citas_by_patient" in self.tools.allowed_tools
+                and not re.search(r"\bpacientes\b|\bella\b|\bel\s+mismo\b|\bese\s+paciente\b", q)):
+            cand = m_cit.group(1).strip()
+            toks = cand.split()
+            if (toks and len(_strip_accents_lc(cand).replace(" ", "")) >= 3
+                    and not any(_strip_accents_lc(t) in _CLINICAL_NAME_STOP for t in toks)
+                    and not any(_strip_accents_lc(t) in _MESES or _strip_accents_lc(t) in _DATE_WORDS
+                                for t in toks)):
+                return await self._citas_by_name(question, cand)
         # Clínico de un paciente NOMBRADO ("Isabella tiene alergias?",
         # "antecedentes de Hernán"). Si hay varios homónimos, los muestra todos.
         clin_name = _extract_clinical_single_patient(question)
@@ -2975,6 +2994,52 @@ class MedicalAgentMCP:
                 return self._present_list(question, [full_row], "report", f"antecedentes de {name}")
         noun = f"antecedentes de {name}" if len(rows) == 1 else f"pacientes llamados {name}"
         return self._present_list(question, rows, "antecedents", noun)
+
+    async def _citas_by_name(self, question: str, name: str) -> Dict[str, Any]:
+        """Citas de TODOS los pacientes (activos) cuyo nombre coincida (homónimos,
+        parcial). Ej: 'citas con alessandra' → citas de todas las Alessandra."""
+        toks = [t for t in _strip_accents_lc(name).split() if len(t) >= 2]
+        token = max(name.split(), key=len)
+        pats = _unwrap_rows(await self.tools.call(
+            "patient_filter",
+            {"search": {"text": token, "fields": ["persona.nombre", "persona.apellidos"]}, "limit": 500},
+        ))
+        matched: List[tuple] = []
+        for p in pats:
+            if p.get("estado") is False:  # inactivo/eliminado
+                continue
+            persona = p.get("persona") if isinstance(p.get("persona"), dict) else {}
+            full = _strip_accents_lc(f"{persona.get('nombre') or ''} {persona.get('apellidos') or ''}")
+            if toks and all(t in full for t in toks):
+                pid = str(p.get("id") or "")
+                if pid:
+                    matched.append((pid, " ".join(filter(None, [persona.get("nombre"), persona.get("apellidos")])) or None))
+        if not matched:
+            return {"answer": f"No encontré pacientes llamados {name}.",
+                    "data": {"rows": [], "row_count": 0}, "steps": 2}
+        if len(matched) == 1:
+            self._used_patient = {"last_patient_id": matched[0][0], "last_patient_name": matched[0][1]}
+        rows: List[Dict[str, Any]] = []
+        for pid, pname in matched:
+            citas = _unwrap_rows(await self.tools.call("citas_by_patient", {"patient_id": pid}))
+            for c in citas:
+                if not isinstance(c, dict):
+                    continue
+                rows.append({
+                    "patient_nombre": pname,
+                    "fecha": c.get("fecha"),
+                    "hora_inicio": c.get("hora_inicio"),
+                    "estado": c.get("estado"),
+                    "motivo": c.get("motivo"),
+                    "tipo_evento": c.get("tipo_evento"),
+                })
+        if not rows:
+            return {"answer": f"No encontré citas de {name}.",
+                    "data": {"rows": [], "row_count": 0}, "steps": 2}
+        if _is_count_question(question):
+            return {"answer": f"Hay {len(rows)} citas de {name}.",
+                    "data": {"rows": [], "row_count": len(rows)}, "steps": 2}
+        return self._present_list(question, rows, "citas", f"citas de {name}")
 
     async def _patients_blood_demographic_with_diagnoses(self, question: str) -> Dict[str, Any]:
         """#7: pacientes con sangre X (+ edad/sexo) y sus diagnósticos de este año.
