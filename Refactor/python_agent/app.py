@@ -4,6 +4,9 @@ from clinical_agent import Runner
 
 st.title("SQL Server AI Agent")
 
+if "session" not in st.session_state:
+    st.session_state.session = {}
+
 user_question = st.text_input("Pregunta al agente:")
 
 if st.button("Consultar"):
@@ -11,7 +14,10 @@ if st.button("Consultar"):
         st.warning("Por favor, ingresa una pregunta.")
     else:
         runner = Runner()
-        result = runner.run(user_question)
+        result = runner.run(user_question, context=st.session_state.session)
+
+        if isinstance(result, dict) and result.get("session"):
+            st.session_state.session = {**st.session_state.session, **result["session"]}
 
         parts = []
         answer = result.get("answer") or "_Sin respuesta_"
@@ -19,11 +25,9 @@ if st.button("Consultar"):
 
         data = result.get("data") or {"rows": [], "row_count": 0}
 
-        # ✅ row_count estable
         if isinstance(data, dict):
             parts.append(f"**Resultados**: {int(data.get('row_count', 0) or 0)} filas")
 
-        # ✅ Botón Excel si existe
         if result.get("excel_bytes") and result.get("excel_name"):
             st.download_button(
                 "Descargar Excel completo",
@@ -34,7 +38,6 @@ if st.button("Consultar"):
 
         st.markdown("\n\n".join(parts))
 
-        # Mostrar tabla solo si el usuario la pidió explícitamente
         _TABLE_WORDS = ("tabla", "lista", "muestra", "dame", "todos", "todas", "listar", "ver", "detalle", "excel")
         show_table = any(w in user_question.lower() for w in _TABLE_WORDS)
 

@@ -209,6 +209,17 @@ class TestDominiosNuevos(unittest.TestCase):
         self.assertIsNone(ca._extract_diagnostico_or("pacientes con seguro o con telefono"))
         self.assertIsNone(ca._extract_diagnostico_or("pacientes con sangre o positivo"))
 
+    def test_extract_diagnostico_simple(self):
+        # Diagnóstico de 2 palabras
+        self.assertEqual(ca._extract_diagnostico_simple("cuantos pacientes con otitis media he atendido"), ["otitis media"])
+        # Diagnóstico de 1 palabra
+        self.assertEqual(ca._extract_diagnostico_simple("pacientes con bronquitis"), ["bronquitis"])
+        # Filtros conocidos NO son diagnósticos
+        self.assertIsNone(ca._extract_diagnostico_simple("pacientes con seguro"))
+        self.assertIsNone(ca._extract_diagnostico_simple("pacientes con sangre"))
+        # Si hay "o", debe devolver None (lo maneja _extract_diagnostico_or)
+        self.assertIsNone(ca._extract_diagnostico_simple("pacientes con bronquitis o diarrea"))
+
     def test_bare_list_followup(self):
         self.assertTrue(ca._is_bare_list_followup("dame la lista"))
         self.assertTrue(ca._is_bare_list_followup("muestralos"))
@@ -222,9 +233,16 @@ class TestDominiosNuevos(unittest.TestCase):
             ca._to_list_form("cuantos pacientes con bronquitis o diarrea"),
             "dame la lista de pacientes con bronquitis o diarrea",
         )
+        # Con verbo conjugado ("he atendido"), usar "lista de" para preservar gramática.
+        self.assertEqual(
+            ca._to_list_form("cuantos pacientes con otitis media he atendido en el mes de abril"),
+            "lista de pacientes con otitis media he atendido en el mes de abril",
+        )
 
     def test_has_patient_reference(self):
         self.assertTrue(ca._has_patient_reference("todas las citas con ella"))
+        self.assertTrue(ca._has_patient_reference("muestrame las citas con ellas"))
+        self.assertTrue(ca._has_patient_reference("antecedentes de ella"))
         self.assertTrue(ca._has_patient_reference("quiero ver todos sus antecedentes"))
         self.assertTrue(ca._has_patient_reference("la ultima cita de ese paciente"))
         self.assertFalse(ca._has_patient_reference("cuantos pacientes hay"))
@@ -636,6 +654,12 @@ class TestBareListFollowup(unittest.TestCase):
         self.assertFalse(ca._is_bare_list_followup("dame los datos de isabella"))
         self.assertFalse(ca._is_bare_list_followup("dame la lista de pacientes con vacuna de rotavirus"))
         self.assertFalse(ca._is_bare_list_followup("muéstrame las citas"))
+
+    def test_cuales_son_esas_followup(self):
+        # "cuales son esas 15 atenciones?" es follow-up (referencia directa al
+        # resultado anterior, aunque mencione la entidad).
+        self.assertTrue(ca._is_bare_list_followup("cuales son esas 15 atenciones?"))
+        self.assertTrue(ca._is_bare_list_followup("cuales son esos 3 pacientes?"))
 
 
 class TestBroadenNameFilter(unittest.TestCase):

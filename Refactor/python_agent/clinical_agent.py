@@ -1982,12 +1982,17 @@ def _wants_latest(question: str) -> bool:
 
 
 def _is_bare_list_followup(question: str) -> bool:
-    """"dame la lista" / "muéstralos" / "los nombres" SIN criterio propio → se
-    refiere al resultado anterior (ej. después de un conteo)."""
+    """"dame la lista" / "muéstralos" / "los nombres" / "cuales son esas 15..."
+    SIN criterio propio → se refiere al resultado anterior (ej. después de un conteo)."""
     q = _strip_accents_lc(question).strip()
+    # Patrón "cuales son esas/esos N..." → siempre es follow-up (referencia directa
+    # al resultado anterior, aunque mencione la entidad).
+    if re.search(r"\bcuales?\s+son\s+esas?\s+\d+|\bcuales?\s+son\s+esos?\s+\d+", q):
+        return True
     if not re.search(
         r"\b(la\s+lista|el\s+listado|los\s+nombres|listalos|list[ae]melos|"
-        r"muestra(?:los|melos)?|mostra(?:los|melos)?|damelos|quiero\s+la\s+lista)\b",
+        r"muestra(?:los|melos)?|mostra(?:los|melos)?|damelos|quiero\s+la\s+lista|"
+        r"cuales?\s+son\s+esas?\b|cuales?\s+son\s+esos?\b)",
         q,
     ):
         return False
@@ -2007,8 +2012,16 @@ def _is_bare_list_followup(question: str) -> bool:
 
 def _to_list_form(prev_question: str) -> str:
     """Convierte la consulta previa (un conteo) en pedido de LISTA."""
-    out = re.sub(r"\bcu[aá]nt[oa]s?\b", "", prev_question or "", flags=re.IGNORECASE)
-    return "dame la lista de " + out.strip(" ,.¿?")
+    # Eliminar "cuantos/cuantas" al inicio y agregar "dame la lista de" o "lista de".
+    out = re.sub(r"^\s*(?:cu[aá]nt[oa]s?\s+)?", "", prev_question or "", flags=re.IGNORECASE)
+    out = out.strip(" ,.¿?")
+    if not out:
+        return prev_question or ""
+    # Si la pregunta ya tiene un verbo conjugado ("he atendido", "atendí"), usar
+    # "lista de" en vez de "dame la lista de" para preservar la gramática.
+    if re.search(r"\b(?:he|has|ha|hemos|han|atend[ií]|vi|vio|vimos)\b", out, re.IGNORECASE):
+        return "lista de " + out
+    return "dame la lista de " + out
 
 
 def _has_patient_reference(question: str) -> bool:
@@ -2017,7 +2030,7 @@ def _has_patient_reference(question: str) -> bool:
     q = _strip_accents_lc(question)
     # Referencias inequívocas.
     if re.search(
-        r"\bcon\s+ella\b|\bde\s+ella\b|\ba\s+ella\b|"
+        r"\bcon\s+ellas?\b|\bde\s+ellas?\b|\ba\s+ellas?\b|"
         r"\bese\s+paciente\b|\besa\s+paciente\b|\bdicho\s+paciente\b|"
         r"\bel\s+mismo\b|\bla\s+misma\b|\bmismo\s+paciente\b",
         q,
@@ -2051,6 +2064,30 @@ def _extract_diagnostico_or(question: str) -> Optional[List[str]]:
     if a in _DX_OR_STOP or b in _DX_OR_STOP:
         return None
     return [a, b]
+
+
+def _extract_diagnostico_simple(question: str) -> Optional[List[str]]:
+    """"con otitis media" / "con bronquitis" → ['otitis media'] / ['bronquitis'].
+
+    Captura 1-2 palabras después de "con" (diagnóstico simple, sin "o").
+    Descarta palabras que son filtros conocidos.
+    """
+    q = _strip_accents_lc(question)
+    # "con <1-2 palabras>" pero NO si hay "o" (ese lo maneja _extract_diagnostico_or).
+    if re.search(r"\bcon\s+[a-z]+\s+o\s+", q):
+        return None
+    m = re.search(r"\bcon\s+([a-záéíóúüñ]+(?:\s+[a-záéíóúüñ]+)?)", q)
+    if not m:
+        return None
+    dx = m.group(1).strip()
+    # Descartar si todas las palabras son stop words.
+    words = dx.split()
+    if all(w in _DX_OR_STOP for w in words):
+        return None
+    # Descartar si es muy corto (< 4 chars totales).
+    if len(dx.replace(" ", "")) < 4:
+        return None
+    return [dx]
 
 
 def _extract_sangre(question: str) -> Optional[str]:
@@ -2090,7 +2127,7 @@ def _extract_antecedent_patient_filters(question: str) -> Optional[Dict[str, Any
     m = re.search(r"peso\s+(?:menor|menos)\s+(?:a|de|que)\s+(\d+(?:\.\d+)?)", q)
     if m:
         preset["peso_max"] = float(m.group(1))
-    m = re.search(r"peso\s+entre\s+(\d+(?:\.\d+)?)\s*(?:y|a)\s*(\d+(?:\.\d+)?)", q)
+    m = re.search(r"peso\s+entre\s+(\d+(?:\.\d+)?)\s*(?:kilo[s]?|kg)?\s*(?:y|a)\s*(\d+(?:\.\d+)?)", q)
     if m:
         lo, hi = sorted([float(m.group(1)), float(m.group(2))])
         preset["peso_min"], preset["peso_max"] = lo, hi
@@ -2910,8 +2947,8 @@ class MedicalAgentMCP:
             and _extract_antecedent_patient_filters(question)
         ):
             return await self._patients_cita_and_clinical(question)
-        # #13: pacientes con <dx1> o <dx2> (diagnósticos, OR)
-        dxs = _extract_diagnostico_or(question)
+        # #13: pacientes con <dx1> o <dx2> (diagnósticos, OR) o diagnóstico simple
+        dxs = _extract_diagnostico_or(question) or _extract_diagnostico_simple(question)
         if dxs and re.search(r"\bpaciente|\bcuant|\bdiagnostic", q):
             return await self._patients_by_diagnosticos(question, dxs)
         # "(todos los) antecedentes de <nombre>" → ficha clínica del paciente,
@@ -2939,7 +2976,7 @@ class MedicalAgentMCP:
             (question or "").lower(),
         )
         if (m_cit and "citas_by_patient" in self.tools.allowed_tools
-                and not re.search(r"\bpacientes\b|\bella\b|\bel\s+mismo\b|\bese\s+paciente\b", q)):
+                and not re.search(r"\bpacientes\b|\bellas?\b|\bel\s+mismo\b|\bese\s+paciente\b", q)):
             cand = m_cit.group(1).strip()
             toks = cand.split()
             if (toks and len(_strip_accents_lc(cand).replace(" ", "")) >= 3
@@ -3372,17 +3409,21 @@ class MedicalAgentMCP:
             "citas_filter", {"filters": date_filters, "limit": MAX_RESULT_LIMIT}
         ))
         cita_pids = {str(c.get("patient_id")) for c in citas if c.get("patient_id") is not None}
+        _log(f"[CITA+CLINICAL] citas encontradas: {len(citas)}, patient_ids únicos: {len(cita_pids)}")
 
+        ant_preset = _extract_antecedent_patient_filters(question)
         ant = _unwrap_rows(await self.tools.call(
             "antecedents_filter",
-            {"preset": _extract_antecedent_patient_filters(question), "limit": MAX_RESULT_LIMIT},
+            {"preset": ant_preset, "limit": MAX_RESULT_LIMIT},
         ))
+        _log(f"[CITA+CLINICAL] antecedentes con preset {ant_preset}: {len(ant)}")
         out, seen = [], set()
         for a in ant:
             pid = str(a.get("patient_id") or "")
             if pid and pid in cita_pids and pid not in seen:
                 seen.add(pid)
                 out.append(_flatten_antecedent_row(a))
+        _log(f"[CITA+CLINICAL] intersección final: {len(out)} pacientes")
         return self._present_list(question, out, "antecedents_filter", "pacientes")
 
     async def _patients_without_recetas(self, question: str) -> Dict[str, Any]:
@@ -3434,11 +3475,12 @@ class MedicalAgentMCP:
         # para guardarlo en la sesión). Arranca en None.
         self._used_patient: Optional[Dict[str, Any]] = None
 
-        # Follow-up "dame la lista" → re-ejecuta la consulta anterior en modo lista.
+        # Follow-up "dame la lista" / "cuales son esas N" → re-ejecuta la consulta
+        # anterior en modo lista.
         _ctx0 = context or {}
         if _is_bare_list_followup(question) and _ctx0.get("last_question"):
             question = _to_list_form(_ctx0["last_question"])
-            _log(f"[FOLLOWUP] 'dame la lista' → re-ejecuto: {question}")
+            _log(f"[FOLLOWUP] → re-ejecuto: {question}")
         # Recordamos la consulta efectiva (para encadenar follow-ups).
         self._effective_question = question
 
@@ -4940,9 +4982,11 @@ class Runner:
     def run(
         self,
         question: str,
+        context: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
 
         return anyio.run(
             ask_with_embedded_mcp,
             question,
+            context,
         )
