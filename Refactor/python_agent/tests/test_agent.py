@@ -190,10 +190,11 @@ class TestDominiosNuevos(unittest.TestCase):
         rows = [{
             "id": 1659, "patient_nombre": "Hernan Prueba",
             "fecha": "2026-06-12T06:29:10Z", "hora_inicio": "2026-06-12T10:00:00Z",
+            "tipo_evento": "Consulta",
             "estado": "pendiente", "motivo": "Control", "comentarios": "x", "patient_id": 5,
         }]
         out = ca._compact_rows(rows, "citas_filter")
-        self.assertEqual(set(out[0].keys()), {"paciente", "fecha", "hora", "estado", "motivo"})
+        self.assertEqual(set(out[0].keys()), {"paciente", "fecha", "hora", "tipo", "estado", "motivo"})
         self.assertEqual(out[0]["paciente"], "Hernan Prueba")
         self.assertEqual(out[0]["hora"], "10:00")  # formateado a HH:MM
 

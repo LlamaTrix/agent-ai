@@ -805,7 +805,8 @@ def _flatten_payment_row(row: Dict[str, Any]) -> Dict[str, Any]:
 _COMPACT_COLS = {
     "citas": [
         ("patient_nombre", "paciente"), ("fecha", "fecha"),
-        ("hora_inicio", "hora"), ("estado", "estado"), ("motivo", "motivo"),
+        ("hora_inicio", "hora"), ("tipo_evento", "tipo"),
+        ("motivo", "motivo"), ("estado", "estado"),
     ],
     "patient": [
         ("nombre", "nombre"), ("ci", "ci"), ("sexo", "sexo"),
@@ -2982,7 +2983,8 @@ class MedicalAgentMCP:
         if not rows:
             return {"answer": f"No encontré antecedentes de un paciente llamado {name}.",
                     "data": {"rows": [], "row_count": 0}, "steps": 2}
-        # Memoria: si es UN solo paciente, recordarlo para follow-ups ("citas con ella").
+        # Memoria: recordar para follow-ups ("citas con ella"). Si es UN paciente,
+        # guardamos id+nombre; si hay varios homónimos, el NOMBRE buscado (sin id).
         if len(seen) == 1:
             pid = next(iter(seen))
             self._used_patient = {"last_patient_id": pid, "last_patient_name": rows[0].get("patient_nombre")}
@@ -2992,6 +2994,8 @@ class MedicalAgentMCP:
                          _strip_accents_lc(question)):
                 full_row = _antecedent_full_display(seen_raw[pid])
                 return self._present_list(question, [full_row], "report", f"antecedentes de {name}")
+        else:
+            self._used_patient = {"last_patient_id": None, "last_patient_name": name}
         noun = f"antecedentes de {name}" if len(rows) == 1 else f"pacientes llamados {name}"
         return self._present_list(question, rows, "antecedents", noun)
 
@@ -3019,6 +3023,8 @@ class MedicalAgentMCP:
                     "data": {"rows": [], "row_count": 0}, "steps": 2}
         if len(matched) == 1:
             self._used_patient = {"last_patient_id": matched[0][0], "last_patient_name": matched[0][1]}
+        else:
+            self._used_patient = {"last_patient_id": None, "last_patient_name": name}
         rows: List[Dict[str, Any]] = []
         for pid, pname in matched:
             citas = _unwrap_rows(await self.tools.call("citas_by_patient", {"patient_id": pid}))
@@ -3465,31 +3471,41 @@ class MedicalAgentMCP:
         _last_pid = _ctx.get("last_patient_id")
         _last_pname = _ctx.get("last_patient_name")
         if (
-            _last_pid
-            and _has_patient_reference(question)
+            _has_patient_reference(question)
             and not _extract_patient_name_after_keyword(question)
             and not _extract_patient_name_lookup(question)
         ):
             qn_ref = _strip_accents_lc(question)
-            if re.search(r"antecedent|sangre|alergia|peso|altura", qn_ref):
-                # Con el nombre recordado, usamos el handler de antecedentes (vista
-                # corta/completa, incl. cigarro/alcohol en "todos los antecedentes").
-                if _last_pname:
-                    self._used_patient = {"last_patient_id": _last_pid, "last_patient_name": _last_pname}
-                    return await self._clinical_patient_query(question, str(_last_pname))
-                tool_name, args = "antecedents_get", {"id": str(_last_pid)}
-            elif _looks_like_estudio_query(question):
-                tool_name, args = "estudios_filter", {"patient_id": str(_last_pid)}
-            elif _looks_like_receta_query(question):
-                tool_name, args = "recetas_filter", {"patient_id": str(_last_pid)}
-            elif _looks_like_visita_query(question):
-                tool_name, args = "visitas_filter", {"patientId": str(_last_pid)}
-            elif "pago" in qn_ref:
-                tool_name, args = "payments_by_patient", {"patientId": str(_last_pid)}
-            else:  # citas por defecto
-                tool_name, args = "citas_by_patient", {"patient_id": str(_last_pid)}
+            ref = _last_pname or None
+            # Referencia ("ella/sus") SIN paciente recordado → no inventar (jamás
+            # devolver "todas las citas"); pedir el nombre.
+            if not _last_pid and not ref:
+                return {"answer": "¿De qué paciente? No tengo a quién te referís — decime el nombre.",
+                        "data": {"rows": [], "row_count": 0}, "steps": 1}
             self._used_patient = {"last_patient_id": _last_pid, "last_patient_name": _last_pname}
-            _log(f"[MEMORIA] referencia → paciente '{_last_pname}' (id {_last_pid}) tool={tool_name}")
+            _log(f"[MEMORIA] referencia → '{_last_pname}' (id {_last_pid})")
+            # Antecedentes y citas tienen handler POR NOMBRE → sirve para 1 o varios
+            # homónimos (ej. tras buscar 5 'Alessandra', "citas con ella" = las 5).
+            if ref and re.search(r"antecedent|sangre|alergia|peso|altura", qn_ref):
+                return await self._clinical_patient_query(question, str(ref))
+            if ref and re.search(r"\bcita", qn_ref):
+                return await self._citas_by_name(question, str(ref))
+            # El resto (estudios/recetas/visitas/pagos) necesita un paciente único.
+            if _last_pid:
+                if _looks_like_estudio_query(question):
+                    tool_name, args = "estudios_filter", {"patient_id": str(_last_pid)}
+                elif _looks_like_receta_query(question):
+                    tool_name, args = "recetas_filter", {"patient_id": str(_last_pid)}
+                elif _looks_like_visita_query(question):
+                    tool_name, args = "visitas_filter", {"patientId": str(_last_pid)}
+                elif "pago" in qn_ref:
+                    tool_name, args = "payments_by_patient", {"patientId": str(_last_pid)}
+                else:  # citas por defecto
+                    return await self._citas_by_name(question, str(ref or _last_pname))
+            else:
+                # Hay un nombre (grupo de homónimos) pero no un paciente único.
+                return {"answer": f"Hay varios pacientes que coinciden con '{ref}'. Decime el nombre completo para mostrarte eso.",
+                        "data": {"rows": [], "row_count": 0}, "steps": 2}
 
         cita_id_query = _extract_cita_id_query(question)
         if cita_id_query and (
