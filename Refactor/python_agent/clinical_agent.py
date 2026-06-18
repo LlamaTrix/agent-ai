@@ -3472,6 +3472,11 @@ class MedicalAgentMCP:
         ):
             qn_ref = _strip_accents_lc(question)
             if re.search(r"antecedent|sangre|alergia|peso|altura", qn_ref):
+                # Con el nombre recordado, usamos el handler de antecedentes (vista
+                # corta/completa, incl. cigarro/alcohol en "todos los antecedentes").
+                if _last_pname:
+                    self._used_patient = {"last_patient_id": _last_pid, "last_patient_name": _last_pname}
+                    return await self._clinical_patient_query(question, str(_last_pname))
                 tool_name, args = "antecedents_get", {"id": str(_last_pid)}
             elif _looks_like_estudio_query(question):
                 tool_name, args = "estudios_filter", {"patient_id": str(_last_pid)}
